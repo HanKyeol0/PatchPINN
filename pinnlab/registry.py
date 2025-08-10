@@ -1,5 +1,8 @@
+# models
 from pinnlab.models.mlp import MLP
 from pinnlab.models.fourier_mlp import FourierMLP
+
+# experiments
 from pinnlab.experiments.burgers1d import Burgers1D
 from pinnlab.experiments.helmholtz2d import Helmholtz2D
 from pinnlab.experiments.poisson2d import Poisson2D

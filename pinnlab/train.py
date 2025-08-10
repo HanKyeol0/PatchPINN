@@ -13,7 +13,7 @@ def load_yaml(path):
         return yaml.safe_load(f)
 
 def main(args):
-    base_cfg = load_yaml(args.config)
+    base_cfg = load_yaml(args.common_config)
     model_cfg = load_yaml(args.model_config)
     exp_cfg   = load_yaml(args.exp_config)
 
@@ -42,9 +42,13 @@ def main(args):
     os.makedirs(out_dir, exist_ok=True)
 
     # WandB
-    run = setup_wandb(base_cfg["log"]["wandb"], args, out_dir, config={
-        "base": base_cfg, "model": model_cfg, "experiment": exp_cfg
-    })
+    if base_cfg["log"]["wandb"]["enabled"]:
+        wandb.login(key=os.getenv('WANDB_API_KEY'))
+        wandb.init(project = base_cfg["log"]["wandb"]["project"],
+                   name = f"{args.experiment_name}_{args.model_name}_{ts}")
+        run = setup_wandb(base_cfg["log"]["wandb"], args, out_dir, config={
+            "base": base_cfg, "model": model_cfg, "experiment": exp_cfg
+        })
 
     # Early stopping
     es_cfg = base_cfg["train"]["early_stopping"]
@@ -120,7 +124,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", required=True)
     parser.add_argument("--experiment_name", required=True)
-    parser.add_argument("--config", required=True)
+    parser.add_argument("--common_config", required=True)
     parser.add_argument("--model_config", required=True)
     parser.add_argument("--exp_config", required=True)
     args = parser.parse_args()

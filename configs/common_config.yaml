@@ -1,0 +1,31 @@
+seed: 42
+device: "cuda"            # "cuda" or "cpu"
+train:
+  epochs: 20000
+  batch:
+    n_f: 4096             # collocation points
+    n_b: 1024             # boundary points
+    n_0: 1024             # initial points (if applicable)
+  optimizer:
+    name: adam
+    lr: 1.0e-3
+  early_stopping:
+    enabled: true
+    patience: 2000
+    min_delta: 1.0e-5
+  loss_weights:
+    f: 1.0    # PDE residual
+    b: 10.0   # boundary
+    ic: 10.0  # initial
+log:
+  out_dir: "outputs"
+  wandb:
+    enabled: true
+    project: "pinnlab"
+    entity: null      # or your team
+    mode: "auto"      # "auto" | "offline" | "disabled"
+eval:
+  grid:
+    nx: 200
+    ny: 200
+    nt: 100

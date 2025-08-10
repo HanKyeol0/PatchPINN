@@ -1,0 +1,9 @@
+in_features: 2
+out_features: 1
+hidden_layers: 4
+hidden_width: 128
+activation: "tanh"
+fourier_features:
+  enabled: true
+  m: 64
+  sigma: 10.0

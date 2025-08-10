@@ -1,26 +1,18 @@
-import torch, numpy as np, math
-from pinnlab.experiments.base import BaseExperiment, grads
+import torch, math
+from pinnlab.experiments.base import BaseExperiment, make_leaf, grad_sum
 from pinnlab.data.geometries import Rectangle, linspace_2d
 
 class Poisson2D(BaseExperiment):
-    """
-    -∇²u = f,  Dirichlet from u*(x,y)=sin(pi x) sin(pi y)
-    => ∇²u* = -2pi^2 u*, so f = 2pi^2 u*
-    """
     def __init__(self, cfg, device):
         super().__init__(cfg, device)
         xa, xb = cfg["domain"]["x"]; ya, yb = cfg["domain"]["y"]
         self.rect = Rectangle(xa, xb, ya, yb, device)
 
-    def u_star(self, x, y):
-        return torch.sin(math.pi*x) * torch.sin(math.pi*y)
-
-    def f(self, x, y):
-        return 2*(math.pi**2)*self.u_star(x,y)
+    def u_star(self, x, y): return torch.sin(math.pi*x) * torch.sin(math.pi*y)
+    def f(self, x, y):     return 2*(math.pi**2)*self.u_star(x,y)
 
     def sample_batch(self, n_f, n_b, n_0):
         X_f = self.rect.sample(n_f)
-        # boundary (same policy as Helmholtz)
         nb = n_b//4
         xa, xb, ya, yb = self.rect.xa, self.rect.xb, self.rect.ya, self.rect.yb
         y = torch.rand(nb,1,device=self.rect.device)*(yb-ya)+ya
@@ -34,18 +26,21 @@ class Poisson2D(BaseExperiment):
         return {"X_f": X_f, "X_b": X_b, "u_b": u_b}
 
     def pde_residual_loss(self, model, batch):
-        X = batch["X_f"].requires_grad_(True)
-        x, y = X[:,0:1], X[:,1:2]
+        X = make_leaf(batch["X_f"])
         u = model(X)
-        u_x = grads(u, x); u_y = grads(u, y)
-        u_xx = grads(u_x, x); u_yy = grads(u_y, y)
+        du = grad_sum(u, X)
+        u_x, u_y = du[:,0:1], du[:,1:2]
+        d2ux = grad_sum(u_x, X)
+        d2uy = grad_sum(u_y, X)
+        u_xx, u_yy = d2ux[:,0:1], d2uy[:,1:2]
+        x, y = X[:,0:1], X[:,1:2]
         res = -(u_xx + u_yy) - self.f(x,y)
-        return (res**2)
+        return res.pow(2)
 
     def boundary_loss(self, model, batch):
         Xb, ub = batch["X_b"], batch["u_b"]
         pred = model(Xb)
-        return (pred - ub)**2
+        return (pred - ub).pow(2)
 
     def relative_l2_on_grid(self, model, grid_cfg):
         nx, ny = grid_cfg["nx"], grid_cfg["ny"]

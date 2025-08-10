@@ -1,0 +1,57 @@
+{
+  "os": "Linux-5.15.0-67-generic-x86_64-with-glibc2.35",
+  "python": "CPython 3.10.6",
+  "startedAt": "2025-08-10T09:33:23.887358Z",
+  "args": [
+    "--model_name",
+    "mlp",
+    "--experiment_name",
+    "burgers1d",
+    "--common_config",
+    "configs/common_config.yaml",
+    "--model_config",
+    "configs/model/mlp.yaml",
+    "--exp_config",
+    "configs/experiment/burgers1d.yaml"
+  ],
+  "program": "-m pinnlab.train",
+  "git": {
+    "remote": "https://github.com/HanKyeol0/PINN-Lab.git",
+    "commit": "f2684ed11f7503847bdbed0a59bd60b257bd2e7d"
+  },
+  "email": "hankyeol@snu.ac.kr",
+  "root": "/root/PINN-research/PINN-Lab",
+  "host": "adc9826ebd34",
+  "executable": "/usr/bin/python",
+  "cpu_count": 4,
+  "cpu_count_logical": 8,
+  "gpu": "NVIDIA GeForce RTX 2080 Ti",
+  "gpu_count": 2,
+  "disk": {
+    "/": {
+      "total": "3936290357248",
+      "used": "285969248256"
+    }
+  },
+  "memory": {
+    "total": "67350802432"
+  },
+  "gpu_nvidia": [
+    {
+      "name": "NVIDIA GeForce RTX 2080 Ti",
+      "memoryTotal": "11811160064",
+      "cudaCores": 4352,
+      "architecture": "Turing",
+      "uuid": "GPU-8b4e9b3e-9b9a-521f-caf8-af3c06cfc7ed"
+    },
+    {
+      "name": "NVIDIA GeForce GTX TITAN X",
+      "memoryTotal": "12884901888",
+      "cudaCores": 3072,
+      "architecture": "Maxwell",
+      "uuid": "GPU-56a35bc2-d798-a43f-cd74-6eb01f9c1b85"
+    }
+  ],
+  "cudaVersion": "12.2",
+  "writerId": "rihh09oakwkh07737yc20le73ffy9384"
+}

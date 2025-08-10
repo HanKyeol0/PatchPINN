@@ -1,29 +1,19 @@
 import torch, math, numpy as np
-from pinnlab.experiments.base import BaseExperiment, grads
+from pinnlab.experiments.base import BaseExperiment, make_leaf, grad_sum
 from pinnlab.data.geometries import Rectangle, linspace_2d
 
 class Helmholtz2D(BaseExperiment):
-    """
-    ∇²u + k² u = f(x,y) on [0,1]x[0,1], Dirichlet boundary from true solution:
-    Choose u*(x,y) = sin(pi x) sin(pi y) => ∇²u* = -2pi^2 u*
-    So f = -∇²u* - k² u* = (2pi^2 - k^2) u*
-    """
     def __init__(self, cfg, device):
         super().__init__(cfg, device)
         xa, xb = cfg["domain"]["x"]; ya, yb = cfg["domain"]["y"]
         self.rect = Rectangle(xa, xb, ya, yb, device)
         self.k = float(cfg.get("k", 2.0))
 
-    def u_star(self, x, y):
-        return torch.sin(math.pi*x) * torch.sin(math.pi*y)
-
-    def f(self, x, y):
-        u = self.u_star(x,y)
-        return (2*math.pi**2 - self.k**2)*u
+    def u_star(self, x, y): return torch.sin(math.pi*x) * torch.sin(math.pi*y)
+    def f(self, x, y):     return (2*math.pi**2 - self.k**2)*self.u_star(x,y)
 
     def sample_batch(self, n_f, n_b, n_0):
-        X_f = self.rect.sample(n_f)                         # [x,y]
-        # boundary: pick edges uniformly
+        X_f = self.rect.sample(n_f)
         nb = n_b//4
         xa, xb, ya, yb = self.rect.xa, self.rect.xb, self.rect.ya, self.rect.yb
         y = torch.rand(nb,1,device=self.rect.device)*(yb-ya)+ya
@@ -34,22 +24,24 @@ class Helmholtz2D(BaseExperiment):
         right  = torch.cat([torch.full_like(y, xb), y], 1)
         X_b = torch.cat([top,bottom,left,right], dim=0)
         u_b = self.u_star(X_b[:,0:1], X_b[:,1:2])
-
-        return {"X_f": torch.cat([X_f,], dim=0), "X_b": X_b, "u_b": u_b}
+        return {"X_f": X_f, "X_b": X_b, "u_b": u_b}
 
     def pde_residual_loss(self, model, batch):
-        X = batch["X_f"].requires_grad_(True)
-        x, y = X[:,0:1], X[:,1:2]
+        X = make_leaf(batch["X_f"])
         u = model(X)
-        u_x = grads(u, x); u_y = grads(u, y)
-        u_xx = grads(u_x, x); u_yy = grads(u_y, y)
+        du = grad_sum(u, X)         # [N,2]
+        u_x, u_y = du[:,0:1], du[:,1:2]
+        d2ux = grad_sum(u_x, X)     # [N,2]
+        d2uy = grad_sum(u_y, X)
+        u_xx, u_yy = d2ux[:,0:1], d2uy[:,1:2]
+        x, y = X[:,0:1], X[:,1:2]
         res = u_xx + u_yy + (self.k**2)*u - self.f(x,y)
-        return (res**2)
+        return res.pow(2)
 
     def boundary_loss(self, model, batch):
         Xb, ub = batch["X_b"], batch["u_b"]
         pred = model(Xb)
-        return (pred - ub)**2
+        return (pred - ub).pow(2)
 
     def relative_l2_on_grid(self, model, grid_cfg):
         nx, ny = grid_cfg["nx"], grid_cfg["ny"]
