@@ -55,7 +55,7 @@ class Burgers1D(BaseExperiment):
         return (pred - u0).pow(2)
 
     def true_solution(self, x, t):
-        return -torch.sin(math.pi*x)  # replace with closed-form if you add one
+        return -torch.sin(math.pi*x)  # no exact solution yet...
 
     def relative_l2_on_grid(self, model, grid_cfg):
         nx, nt = grid_cfg["nx"], grid_cfg["nt"]

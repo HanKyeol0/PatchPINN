@@ -1,0 +1,22 @@
+# 2D incompressible Navier–Stokes (Taylor–Green vortex), periodic in x,y
+time_dependent: true
+
+domain:
+  x: [0.0, 6.283185307179586]   # 0 .. 2π
+  y: [0.0, 6.283185307179586]   # 0 .. 2π
+  t: [0.0, 1.0]
+
+# Fluid params
+nu: 0.01         # kinematic viscosity
+rho: 1.0         # density
+U0: 1.0          # initial velocity amplitude
+k: 1.0           # wavenumber
+
+# Loss weights inside PDE residual (you can tune)
+weights:
+  continuity: 1.0
+  momentum: 1.0
+
+# Model I/O
+in_features: 3   # (x,y,t)
+out_features: 3  # (u,v,p)
