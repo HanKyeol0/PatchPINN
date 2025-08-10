@@ -1,0 +1,5 @@
+domain:
+  x: [0.0, 1.0]
+  y: [0.0, 1.0]
+in_features: 2
+out_features: 1

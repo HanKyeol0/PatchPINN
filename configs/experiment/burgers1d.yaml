@@ -1,0 +1,6 @@
+domain:
+  x: [-1.0, 1.0]
+  t: [0.0, 1.0]
+nu: 0.01/np.pi
+in_features: 2 # (x,t)
+out_features: 1
