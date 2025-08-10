@@ -73,8 +73,8 @@ def main(args):
         batch = exp.sample_batch(n_f=n_f, n_b=n_b, n_0=n_0)
 
         loss_f = exp.pde_residual_loss(model, batch).mean() if batch.get("X_f") is not None else torch.tensor(0., device=device)
-        loss_b = exp.boundary_loss(model, batch).mean()        if batch.get("X_b") is not None else torch.tensor(0., device=device)
-        loss_0 = exp.initial_loss(model, batch).mean()         if batch.get("X_0") is not None else torch.tensor(0., device=device)
+        loss_b = exp.boundary_loss(model, batch).mean()     if batch.get("X_b") is not None else torch.tensor(0., device=device)
+        loss_0 = exp.initial_loss(model, batch).mean()      if batch.get("X_0") is not None else torch.tensor(0., device=device)
 
         loss = w_f*loss_f + w_b*loss_b + w_ic*loss_0
 

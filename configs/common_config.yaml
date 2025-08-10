@@ -11,7 +11,7 @@ train:
     lr: 1.0e-3
   early_stopping:
     enabled: true
-    patience: 2000
+    patience: 1000
     min_delta: 1.0e-5
   loss_weights:
     f: 1.0    # PDE residual
@@ -23,7 +23,7 @@ log:
     enabled: true
     project: "pinnlab"
     entity: null      # or your team
-    mode: "auto"      # "auto" | "offline" | "disabled"
+    mode: "online"      # "auto" | "offline" | "disabled"
 eval:
   grid:
     nx: 200

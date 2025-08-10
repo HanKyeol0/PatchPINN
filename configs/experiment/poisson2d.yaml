@@ -1,5 +1,5 @@
 # Toggle this:
-time_dependent: false   # false -> Poisson; true -> Heat (time-dependent)
+time_dependent: true   # false -> Poisson; true -> Heat (time-dependent)
 
 domain:
   x: [0.0, 1.0]
@@ -19,5 +19,5 @@ kappa: 1.0
 lambda: auto            # "auto" -> lambda = 2*kappa*pi^2 (f=0); or set a number
 
 # IMPORTANT: Set input dimension to match the toggle
-in_features: 2          # set 3 when time_dependent: true
+in_features: 3          # set 3 when time_dependent: true
 out_features: 1
