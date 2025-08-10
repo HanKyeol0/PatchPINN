@@ -1,4 +1,0 @@
-[wandb] disabled: 1 validation error for Settings
-mode
-  unexpected value; permitted: 'online', 'offline', 'shared', 'disabled', 'dryrun', 'run' (type=value_error.const; given=auto; permitted=('online', 'offline', 'shared', 'disabled', 'dryrun', 'run'))
-Training: 100%|█| 20000/20000 [02:59<00:00, 111.32it/s, loss/total=1.711e-02, loss/f=4.246e-03, loss
