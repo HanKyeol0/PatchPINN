@@ -1,6 +1,7 @@
 # models
 from pinnlab.models.mlp import MLP
 from pinnlab.models.fourier_mlp import FourierMLP
+from pinnlab.models.residual_network import ResidualNetwork
 
 # experiments
 from pinnlab.experiments.burgers1d import Burgers1D
@@ -14,6 +15,7 @@ from pinnlab.experiments.reactiondiffusion2d import ReactionDiffusion2D
 _MODEL_REG = {
     "mlp": MLP,
     "fourier_mlp": FourierMLP,
+    "residual_network": ResidualNetwork,
 }
 
 _EXP_REG = {
