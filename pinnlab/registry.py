@@ -6,11 +6,14 @@ from pinnlab.models.residual_network import ResidualNetwork
 # experiments
 from pinnlab.experiments.burgers1d import Burgers1D
 from pinnlab.experiments.helmholtz2d import Helmholtz2D
+from pinnlab.experiments.helmholtz2d_steady import Helmholtz2DSteady
 from pinnlab.experiments.poisson2d import Poisson2D
 from pinnlab.experiments.navierstokes2d import NavierStokes2D
 from pinnlab.experiments.convection1d import Convection1D
 from pinnlab.experiments.reactiondiffusion1d import ReactionDiffusion1D
 from pinnlab.experiments.reactiondiffusion2d import ReactionDiffusion2D
+from pinnlab.experiments.allencahn1d import AllenCahn1D
+from pinnlab.experiments.allencahn2d import AllenCahn2D
 
 _MODEL_REG = {
     "mlp": MLP,
@@ -21,11 +24,14 @@ _MODEL_REG = {
 _EXP_REG = {
     "burgers1d": Burgers1D,
     "helmholtz2d": Helmholtz2D,
+    "helmholtz2d_steady": Helmholtz2DSteady,
     "poisson2d": Poisson2D,
     "navierstokes2d": NavierStokes2D,
     "convection1d": Convection1D,
     "reactiondiffusion1d": ReactionDiffusion1D,
     "reactiondiffusion2d": ReactionDiffusion2D,
+    "allencahn1d": AllenCahn1D,
+    "allencahn2d": AllenCahn2D,
 }
 
 def get_model(name):     return _MODEL_REG[name]
