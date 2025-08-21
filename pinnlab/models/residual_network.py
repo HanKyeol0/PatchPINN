@@ -15,18 +15,15 @@ def get_act(name):
 class ResidualBlock(nn.Module):
     def __init__(self, in_dim, hidden_dim, out_dim, activation):
         super().__init__()
-        self.linear1 = nn.Linear(in_dim, hidden_dim)
-        self.activation = activation
-        self.linear2 = nn.Linear(hidden_dim, out_dim)
+        self.main = nn.Sequential(                 # <-- central path
+            nn.Linear(in_dim, hidden_dim),
+            activation,
+            nn.Linear(hidden_dim, out_dim),
+        )
         self.shortcut = nn.Linear(in_dim, out_dim)  # Projection shortcut
 
     def forward(self, x):
-        out = self.linear1(x)
-        out = self.activation(out)
-        out = self.linear2(out)
-        shortcut = self.shortcut(x)
-        return out + shortcut
-
+        return self.main(x) + self.shortcut(x)
 
 class ResidualNetwork(nn.Module):
     def __init__(self, cfg):

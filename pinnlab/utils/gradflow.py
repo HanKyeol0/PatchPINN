@@ -1,8 +1,51 @@
 # pinnlab/utils/gradflow.py
-import os, json, math, numpy as np, torch
+import os, json, math, numpy as np, torch, re
 from collections import OrderedDict
 
 def _ensure_dir(p): os.makedirs(p, exist_ok=True)
+
+def _detect_tag_from_name(name:str, main_pat, skip_pat):
+    if skip_pat and re.search(skip_pat, name):
+        return "skip"
+    if main_pat and re.search(main_pat, name):
+        return "main"
+    return None
+
+def get_linear_layers_with_tags(model, main_pat=None, skip_pat=None):
+    """
+    Returns:
+      layers: OrderedDict[name -> nn.Linear]
+      params: list[Parameter] in order [W0,b0,W1,b1,...]
+      slices: dict[name -> (start,end)]  index range in params
+      tags:   dict[name -> 'main'|'skip'|None]
+    Tag priority:
+      1) module has attribute `_gradflow_tag` set to 'main'/'skip'
+      2) name regex matches skip or main patterns
+      3) otherwise None
+    """
+    layers = OrderedDict()
+    for name, m in model.named_modules():
+        if isinstance(m, torch.nn.Linear):
+            layers[name] = m
+
+    params, slices, tags = [], {}, {}
+    k = 0
+    for name, lin in layers.items():
+        start = k
+        params.append(lin.weight); k += 1
+        if lin.bias is not None:
+            params.append(lin.bias); k += 1
+        end = k
+        slices[name] = (start, end)
+
+        # resolve tag
+        tag = getattr(lin, "_gradflow_tag", None)
+        if tag not in ("main","skip",None):
+            tag = None
+        if tag is None:
+            tag = _detect_tag_from_name(name, main_pat, skip_pat)
+        tags[name] = tag
+    return layers, params, slices, tags
 
 def list_linear_layers(model):
     """
@@ -75,6 +118,27 @@ class GradientFlowLogger:
         self.stats_prefix = str(plot_cfg.get("stats_prefix", "gradflow_stats"))
         self.max_cols = int(plot_cfg.get("max_cols", 4))  # subplots per row
 
+        # --- tagging config (from YAML) ---
+        tag_cfg = (plot_cfg or {}).get("tagging", {}) if isinstance(plot_cfg, dict) else {}
+        self.tag_main_regex = tag_cfg.get("main_regex", r"(?:^|\.)(?:main|central|body)(?:\.|$)")
+        self.tag_skip_regex = tag_cfg.get("skip_regex", r"(?:^|\.)(?:skip|shortcut|proj|downsample)(?:\.|$)")
+
+        # collect linear layers + parameter slices + tags
+        (self.layers,
+        self.params,
+        self.layer_slices,
+        self.layer_tags) = get_linear_layers_with_tags(
+            model,
+            main_pat=self.tag_main_regex,
+            skip_pat=self.tag_skip_regex
+        )
+
+        self.layer_names = list(self.layers.keys())
+
+        # group storage (per-path aggregates)
+        self.group_stats = {}  # {loss: {path: {"mean":[], "max":[], "l2":[]}}}
+        self.group_vecs  = {}  # {loss: {path: [np.array,...]}}
+
     def should_collect(self, step:int) -> bool:
         return self.enable and (step % self.every == 0)
 
@@ -122,12 +186,21 @@ class GradientFlowLogger:
                 g_flat = torch.cat(g_parts, dim=0)
                 self._record_stats(loss_name, layer_name, g_flat)
 
-                if self.store_vectors:
-                    arr = g_flat.detach().cpu().numpy()
-                    L = self.vecs.setdefault(loss_name, {}).setdefault(layer_name, [])
-                    if len(L) >= self.max_keep:
-                        L.pop(0)
-                    L.append(arr)
+                tag = self.layer_tags.get(layer_name, None)
+                if tag in ("main","skip"):
+                    # group stats
+                    gd = self.group_stats.setdefault(loss_name, {}).setdefault(tag, {"mean":[], "max":[], "l2":[]})
+                    g_abs = g_flat.abs()
+                    gd["mean"].append(float(g_abs.mean()))
+                    gd["max"].append(float(g_abs.max()))
+                    gd["l2"].append(float(torch.linalg.vector_norm(g_flat).item()))
+                    # group vectors (aggregate last snapshot by concatenation)
+                    if self.store_vectors:
+                        arr = g_flat.detach().cpu().numpy()
+                        L = self.group_vecs.setdefault(loss_name, {}).setdefault(tag, [])
+                        if len(L) >= self.max_keep:
+                            L.pop(0)
+                        L.append(arr)
 
                 if self.wandb_hist:
                     try:
@@ -154,6 +227,16 @@ class GradientFlowLogger:
         with open(os.path.join(self.out_dir, "layer_names.txt"), "w") as f:
             for n in self.layer_names:
                 f.write(n + "\n")
+        
+        # save group stats/vectors
+        with open(os.path.join(self.out_dir, "gradflow_group_stats.json"), "w") as f:
+            json.dump(self.group_stats, f)
+
+        if self.store_vectors and self.group_vecs:
+            np.savez(os.path.join(self.out_dir, "gradflow_group_vectors.npz"),
+                    **{ f"{ln}|{tag}": np.array(vs, dtype=object)
+                        for ln, per in self.group_vecs.items()
+                        for tag, vs in per.items() })
 
     # --------------- Plotting ---------------
     def save_plots(self):
@@ -166,6 +249,12 @@ class GradientFlowLogger:
             if p: saved.append(p)
         if self.plot_stats_enabled:
             saved.extend(self._plot_stats_all())
+        if self.plot_kde_enabled:
+            p2 = self._plot_kde_paths()
+            if p2: saved.append(p2)
+        if self.plot_stats_enabled:
+            saved.extend(self._plot_stats_paths())
+
         return saved
 
     def _plot_kde(self):
@@ -216,6 +305,75 @@ class GradientFlowLogger:
             return out
         except Exception:
             return None
+        
+    def _plot_kde_paths(self):
+        if not (self.store_vectors and self.group_vecs):
+            return None
+        try:
+            import matplotlib.pyplot as plt
+            try:
+                import seaborn as sns
+                use_sns = True
+            except Exception:
+                sns = None
+                use_sns = False
+
+            # one figure per loss
+            outs = []
+            for ln in self.plot_losses:
+                per = self.group_vecs.get(ln, {})
+                if not per: 
+                    continue
+                fig, ax = plt.subplots(figsize=(5.2, 3.6))
+                for tag in ("main","skip"):
+                    arrs = per.get(tag, [])
+                    if not arrs:
+                        continue
+                    g = np.asarray(arrs[-1]).ravel()  # last snapshot
+                    if use_sns:
+                        sns.kdeplot(g, ax=ax, label=f"{ln.upper()} | {tag}", bw_method="scott", fill=False)
+                    else:
+                        ax.hist(g, bins=120, density=True, histtype="step", label=f"{ln.upper()} | {tag}")
+                ax.set_title(f"Gradient KDE by path ({ln})")
+                ax.set_xlim([-3.0, 3.0]); ax.legend()
+                plt.tight_layout()
+                out = os.path.join(self.out_dir, f"gradflow_kde_paths_{ln}.png")
+                fig.savefig(out, dpi=160); plt.close(fig)
+                outs.append(out)
+            # return first (for API); save_plots already returns list anyway
+            return outs[0] if outs else None
+        except Exception:
+            return None
+    
+    def _plot_stats_paths(self):
+        if not self.group_stats:
+            return []
+        try:
+            import matplotlib.pyplot as plt
+            saved = []
+            metrics = ["mean","max","l2"]
+            for ln in self.plot_losses:
+                per = self.group_stats.get(ln, {})
+                if not per: 
+                    continue
+                for metric in metrics:
+                    fig, ax = plt.subplots(figsize=(5.6, 3.6))
+                    for tag in ("main","skip"):
+                        series = per.get(tag, {}).get(metric, [])
+                        if not series:
+                            continue
+                        xs = np.arange(1, len(series)+1)
+                        ax.plot(xs, series, label=f"{tag}")
+                    ax.set_title(f"{ln.upper()} | path {metric}")
+                    ax.set_yscale("symlog")
+                    ax.legend()
+                    plt.tight_layout()
+                    out = os.path.join(self.out_dir, f"{self.stats_prefix}_paths_{ln}_{metric}.png")
+                    fig.savefig(out, dpi=160); plt.close(fig)
+                    saved.append(out)
+            return saved
+        except Exception:
+            return []
 
     def _plot_stats_all(self):
         if not self.stats:
