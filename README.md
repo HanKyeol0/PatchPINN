@@ -18,93 +18,72 @@
 ## 📁 Repository Structure
 
 pinnlab/
+
 ├─── train.py # CLI entrypoint: loads configs, trains, logs, plots
+
 ├── registry.py # Central registry (models & experiments)
+
 ├── models/ (keep updating)
+
 │ ├── mlp.py # Baseline MLP
+
 │ ├── fourier_mlp.py # Fourier features + MLP
+
 │ └── residual_network.py # Residual (skip-connected) PINN (optional/extend)
+
 ├── experiments/ (keep updating)
+
 │ ├── base.py
+
 │ ├── allencahn1d.py
+
 │ ├── allencahn2d.py
+
 │ ├── burgers1d.py
+
 │ ├── convection1d.py
+
 │ ├── helmholtz2d_steady.py
+
 │ ├── helmholtz2d.py
+
 │ ├── navierstokes2d.py
+
 │ ├── poisson2d.py
+
 │ ├── reactiondiffusion1d.py
+
 │ └── reactiondiffusion2d.py
+
 ├── data/
+
 │ ├── geometries.py # Define simple domain shape (Interval, Rectangle)
+
 │ └── samplers.py # Sampling data points
+
 └── utils/
+
   ├── early_stopping.py
+
   ├── gradflow.py
+
   ├── plotting.py
+
   ├── seed.py
+
   └── wandb_utils.py
+
 configs/
+
 ├── common_config.yaml # global training/log/eval settings
+
 ├── model/.yaml # per-model configs
+
 └── experiment/.yaml # per-experiment configs
+
 scripts/
+
 └── model_name/experiment_name.sh # per-model-per-experiment sh files
-
-
-your-repo/
-├─ README.md
-├─ LICENSE
-├─ .gitignore
-├─ .pre-commit-config.yaml
-├─ pyproject.toml                # or setup.cfg / requirements.txt
-├─ .github/
-│  ├─ workflows/
-│  │  └─ ci.yml
-│  └─ ISSUE_TEMPLATE/
-│     ├─ bug_report.md
-│     └─ feature_request.md
-├─ docs/
-│  ├─ index.md
-│  └─ api/
-├─ src/
-│  └─ your_package/
-│     ├─ __init__.py
-│     ├─ cli.py
-│     ├─ config.py
-│     ├─ models/
-│     │  ├─ __init__.py
-│     │  └─ …
-│     ├─ training/
-│     │  ├─ __init__.py
-│     │  └─ …
-│     ├─ utils/
-│     │  ├─ __init__.py
-│     │  └─ …
-│     └─ experiments/
-│        └─ …
-├─ configs/
-│  ├─ default.yaml
-│  └─ experiment_001.yaml
-├─ scripts/
-│  ├─ download_data.sh
-│  ├─ train.py
-│  └─ evaluate.py
-├─ notebooks/
-│  ├─ 01_exploration.ipynb
-│  └─ 02_baseline.ipynb
-├─ examples/
-│  └─ quickstart.py
-├─ data/
-│  ├─ raw/          # place .gitkeep to commit empty dirs
-│  ├─ processed/    # place .gitkeep
-│  └─ external/     # place .gitkeep
-├─ tests/
-│  ├─ __init__.py
-│  └─ test_cli.py
-└─ benchmarks/
-   └─ README.md
 
 
 > Tip: The code is deliberately lightweight—add new models or PDEs by dropping a file and registering it in `registry.py`.
