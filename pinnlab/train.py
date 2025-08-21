@@ -1,4 +1,4 @@
-import os, time, yaml, argparse, math
+import os, time, yaml, argparse, math, sys
 import torch
 import wandb
 from tqdm import trange
@@ -7,6 +7,7 @@ from pinnlab.utils.seed import seed_everything
 from pinnlab.utils.early_stopping import EarlyStopping
 from pinnlab.utils.plotting import save_plots_1d, save_plots_2d
 from pinnlab.utils.wandb_utils import setup_wandb, wandb_log, wandb_finish
+from pinnlab.utils.gradflow import GradientFlowLogger
 
 def load_yaml(path):
     with open(path, "r", encoding="utf-8") as f:
@@ -50,6 +51,17 @@ def main(args):
             "base": base_cfg, "model": model_cfg, "experiment": exp_cfg
         })
 
+    # gradient flow logger
+    gf = GradientFlowLogger(
+        model, out_dir,
+        enable=base_cfg.get("gradflow", {}).get("enabled", True),
+        every=int(base_cfg.get("gradflow", {}).get("every", 1000)),
+        store_vectors=bool(base_cfg.get("gradflow", {}).get("store_vectors", False)),
+        max_keep_per_layer=int(base_cfg.get("gradflow", {}).get("max_keep", 20)),
+        wandb_hist=bool(base_cfg.get("gradflow", {}).get("wandb_hist", False)),
+        plot_cfg=base_cfg.get("gradflow", {}).get("plot", {})
+    )
+
     # Early stopping
     es_cfg = base_cfg["train"]["early_stopping"]
     early = EarlyStopping(patience=es_cfg["patience"], min_delta=es_cfg["min_delta"]) if es_cfg["enabled"] else None
@@ -66,7 +78,16 @@ def main(args):
     n_0 = base_cfg["train"]["batch"]["n_0"]
 
     epochs = base_cfg["train"]["epochs"]
-    pbar = trange(epochs, desc="Training", ncols=100)
+
+    use_tty = sys.stdout.isatty()
+    pbar = trange(
+        epochs,
+        desc="Training",
+        ncols=120,
+        dynamic_ncols=True,
+        leave=False,          # don't leave old bars behind
+        disable=not use_tty,  # if output is piped, avoid multiline spam
+    )
 
     for ep in pbar:
         model.train()
@@ -76,15 +97,21 @@ def main(args):
         loss_b = exp.boundary_loss(model, batch).mean()     if batch.get("X_b") is not None else torch.tensor(0., device=device)
         loss_0 = exp.initial_loss(model, batch).mean()      if batch.get("X_0") is not None else torch.tensor(0., device=device)
 
-        loss = w_f*loss_f + w_b*loss_b + w_ic*loss_0
+        loss_f_s = loss_f.mean() if torch.is_tensor(loss_f) and loss_f.dim() > 0 else loss_f
+        loss_b_s = loss_b.mean() if torch.is_tensor(loss_b) and loss_b.dim() > 0 else loss_b
+        loss_0_s = loss_0.mean() if torch.is_tensor(loss_0) and loss_0.dim() > 0 else loss_0
+
+        gf.collect({"res": loss_f_s, "bc": loss_b_s, "ic": loss_0_s})
+
+        total_loss = w_f*loss_f + w_b*loss_b + w_ic*loss_0
 
         optimizer.zero_grad(set_to_none=True)
-        loss.backward()
+        total_loss.backward()
         optimizer.step()
 
         # Log
         log_dict = {
-            "loss/total": loss.item(),
+            "loss/total": total_loss.item(),
             "loss/f": loss_f.item(),
             "loss/b": loss_b.item(),
             "loss/ic": loss_0.item(),
@@ -106,6 +133,12 @@ def main(args):
             if early and early.step(best_metric):
                 print(f"\n[EarlyStopping] Stopping at epoch {ep}. Best rel_l2={best_metric:.3e}")
                 break
+
+    gf.save()
+    if gf.plot_enabled:
+        saved = gf.save_plots()
+        for p in saved:
+            print(f"[gradflow] saved plot: {p}")
 
     # Restore best
     if best_state:

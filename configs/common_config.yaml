@@ -29,3 +29,17 @@ eval:
     nx: 200
     ny: 200
     nt: 100
+gradflow:
+  enabled: true
+  every: 1000
+  store_vectors: true      # must be true if you want KDE
+  wandb_hist: false
+  max_keep: 20
+  plot:
+    enabled: true          # <-- toggle all plotting
+    kde: true              # KDE of latest vectors per layer (paper-style)
+    stats: true            # time-series curves of mean/max/L2 per layer
+    losses: ["bc", "res"]  # which losses to compare
+    kde_filename: "gradflow_kde.png"
+    stats_prefix: "gradflow_stats"
+    max_cols: 4            # subplots per row
