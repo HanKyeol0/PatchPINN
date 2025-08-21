@@ -18,39 +18,64 @@
 ## 📁 Repository Structure
 
 pinnlab/
-|-- train.py # CLI entrypoint: loads configs, trains, logs, plots
-|-- registry.py # Central registry (models & experiments)
-|-- models/ (keep updating)
-| |-- mlp.py # Baseline MLP
-| |-- fourier_mlp.py # Fourier features + MLP
-| |-- residual_network.py # Residual (skip-connected) PINN (optional/extend)
-|-- experiments/ (keep updating)
-| |-- base.py
-| |-- allencahn1d.py
-| |-- allencahn2d.py
-| |-- burgers1d.py
-| |-- convection1d.py
-| |-- helmholtz2d_steady.py
-| |-- helmholtz2d.py
-| |-- navierstokes2d.py
-| |-- poisson2d.py
-| |-- reactiondiffusion1d.py
-| |-- reactiondiffusion2d.py
-|-- data/
-| |-- geometries.py # Define simple domain shape (Interval, Rectangle)
-| |-- samplers.py # Sampling data points
-|-- utils/
-  |-- early_stopping.py
-  |-- gradflow.py
-  |-- plotting.py
-  |-- seed.py
-  |-- wandb_utils.py
+├─ train.py # CLI entrypoint: loads configs, trains, logs, plots
+├─ registry.py # Central registry (models & experiments)
+├─ models/ (keep updating)
+│ ├─ mlp.py # Baseline MLP
+│ ├─ fourier_mlp.py # Fourier features + MLP
+│ └─ residual_network.py # Residual (skip-connected) PINN (optional/extend)
+├─ experiments/ (keep updating)
+│ ├─ base.py
+│ ├─ allencahn1d.py
+│ ├─ allencahn2d.py
+│ ├─ burgers1d.py
+│ ├─ convection1d.py
+│ ├─ helmholtz2d_steady.py
+│ ├─ helmholtz2d.py
+│ ├─ navierstokes2d.py
+│ ├─ poisson2d.py
+│ ├─ reactiondiffusion1d.py
+│ └─ reactiondiffusion2d.py
+├─ data/
+│ ├─ geometries.py # Define simple domain shape (Interval, Rectangle)
+│ └─ samplers.py # Sampling data points
+└─ utils/
+  ├─ early_stopping.py
+  ├─ gradflow.py
+  ├─ plotting.py
+  ├─ seed.py
+  └─ wandb_utils.py
 configs/
-|-- common_config.yaml # global training/log/eval settings
-|-- model/.yaml # per-model configs
-|-- experiment/.yaml # per-experiment configs
+├─ common_config.yaml # global training/log/eval settings
+├─ model/.yaml # per-model configs
+└─ experiment/.yaml # per-experiment configs
 scripts/
-|-- model_name/experiment_name.sh # per-model-per-experiment sh files
+└─ model_name/experiment_name.sh # per-model-per-experiment sh files
+
+.
+|-- train.py
+|-- registry.py
+|-- models/
+|   |-- mlp.py
+|   |-- fourier_mlp.py
+|-- experiments/
+|   |-- burgers1d.py
+|   |-- convection1d.py
+|   |-- poisson2d.py
+|   |-- helmholtz2d.py
+|   |-- navierstokes2d.py
+|   |-- reactiondiffusion2d.py
+|   |-- allencahn2d.py
+|-- utils/
+|   |-- early_stopping.py
+|   |-- plotting.py
+|   |-- seed.py
+|   |-- wandb_utils.py
+|   |-- geometries.py
+|   |-- samplers.py
+|-- configs/
+|   |-- common_config.yaml
+
 
 > Tip: The code is deliberately lightweight—add new models or PDEs by dropping a file and registering it in `registry.py`.
 
