@@ -1,4 +1,4 @@
-import os, time, yaml, argparse, math, sys, json, subprocess, platform
+import os, time, yaml, argparse, sys
 import torch
 import wandb
 from tqdm import trange
@@ -16,17 +16,6 @@ def load_yaml(path):
 def _save_yaml(path, obj):
     with open(path, "w", encoding="utf-8") as f:
         yaml.safe_dump(obj, f)
-
-def _git_info():
-    def _run(cmd):
-        try: return subprocess.check_output(cmd, stderr=subprocess.STDOUT).decode().strip()
-        except: return None
-    return {
-        "commit": _run(["git", "rev-parse", "HEAD"]),
-        "branch": _run(["git", "rev-parse", "--abbrev-ref", "HEAD"]),
-        "status": _run(["git", "status", "--porcelain"]),
-        "remote": _run(["git", "config", "--get", "remote.origin.url"]),
-    }
 
 def main(args):
     base_cfg = load_yaml(args.common_config)
