@@ -1,4 +1,4 @@
-import os, time, yaml, argparse, math, sys
+import os, time, yaml, argparse, math, sys, json, subprocess, platform
 import torch
 import wandb
 from tqdm import trange
@@ -12,6 +12,21 @@ from pinnlab.utils.gradflow import GradientFlowLogger
 def load_yaml(path):
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+def _save_yaml(path, obj):
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(obj, f)
+
+def _git_info():
+    def _run(cmd):
+        try: return subprocess.check_output(cmd, stderr=subprocess.STDOUT).decode().strip()
+        except: return None
+    return {
+        "commit": _run(["git", "rev-parse", "HEAD"]),
+        "branch": _run(["git", "rev-parse", "--abbrev-ref", "HEAD"]),
+        "status": _run(["git", "status", "--porcelain"]),
+        "remote": _run(["git", "config", "--get", "remote.origin.url"]),
+    }
 
 def main(args):
     base_cfg = load_yaml(args.common_config)
@@ -41,6 +56,10 @@ def main(args):
     ts = time.strftime("%Y%m%d-%H%M%S")
     out_dir = os.path.join(base_cfg["log"]["out_dir"], f"{args.experiment_name}_{args.model_name}_{ts}")
     os.makedirs(out_dir, exist_ok=True)
+
+    _save_yaml(os.path.join(out_dir, "config.yaml"), {
+        "base": base_cfg, "model": model_cfg, "experiment": exp_cfg
+    })
 
     # WandB
     if base_cfg["log"]["wandb"]["enabled"]:
