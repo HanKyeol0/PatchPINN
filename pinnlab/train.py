@@ -70,9 +70,12 @@ def main(args):
         plot_cfg=base_cfg.get("gradflow", {}).get("plot", {})
     )
 
+    epochs = base_cfg["train"]["epochs"]
+    eval_every = int(base_cfg.get("eval").get("every", 100))
+
     # Early stopping
     es_cfg = base_cfg["train"]["early_stopping"]
-    early = EarlyStopping(patience=es_cfg["patience"], min_delta=es_cfg["min_delta"]) if es_cfg["enabled"] else None
+    early = EarlyStopping(patience=es_cfg["patience"], min_delta=es_cfg["min_delta"], eval_every=eval_every) if es_cfg["enabled"] else None
     best_state = None
     best_metric = float("inf")
 
@@ -85,8 +88,6 @@ def main(args):
     n_b = exp_cfg.get("batch", {}).get("n_b", base_cfg["train"]["batch"]["n_b"])
     n_0 = exp_cfg.get("batch", {}).get("n_0", base_cfg["train"]["batch"]["n_0"])
 
-    epochs = base_cfg["train"]["epochs"]
-
     use_tty = sys.stdout.isatty()
     pbar = trange(
         epochs,
@@ -96,6 +97,7 @@ def main(args):
         leave=False,          # don't leave old bars behind
         disable=not use_tty,  # if output is piped, avoid multiline spam
     )
+    gf_stop = base_cfg["gradflow"]["stop_at"]
 
     for ep in pbar:
         model.train()
@@ -109,7 +111,8 @@ def main(args):
         loss_b_s = loss_b.mean() if torch.is_tensor(loss_b) and loss_b.dim() > 0 else loss_b
         loss_0_s = loss_0.mean() if torch.is_tensor(loss_0) and loss_0.dim() > 0 else loss_0
 
-        gf.collect({"res": loss_f_s, "bc": loss_b_s, "ic": loss_0_s})
+        if ep <= gf_stop:
+            gf.collect({"res": loss_f_s, "bc": loss_b_s, "ic": loss_0_s})
 
         total_loss = w_f*loss_f + w_b*loss_b + w_ic*loss_0
 
@@ -131,16 +134,17 @@ def main(args):
 
         # Simple validation metric (relative L2 on a fixed grid)
         best_path = os.path.join(out_dir, "best.pt")
-        if ep % 500 == 0 or ep == epochs-1:
+        if ep % eval_every == 0 or ep == epochs-1:
             with torch.no_grad():
                 rel_l2 = exp.relative_l2_on_grid(model, base_cfg["eval"]["grid"])
-                wandb_log({"eval/rel_l2": rel_l2, "epoch": ep})
-                if rel_l2 < best_metric:
-                    best_metric = rel_l2
-                    best_state = {k: v.clone() for k,v in model.state_dict().items()}
-                    torch.save({k:v.detach().cpu() for k,v in best_state.items()}, best_path)
+            wandb_log({"eval/rel_l2": rel_l2, "epoch": ep})
 
-            if early and early.step(best_metric):
+            if rel_l2 < (best_metric - es_cfg.get("min_delta", 0.0)):
+                best_metric = rel_l2
+                best_state = {k: v.clone() for k,v in model.state_dict().items()}
+                torch.save({k:v.detach().cpu() for k,v in best_state.items()}, best_path)
+
+            if early and early.step(rel_l2):
                 print(f"\n[EarlyStopping] Stopping at epoch {ep}. Best rel_l2={best_metric:.3e}")
                 break
 

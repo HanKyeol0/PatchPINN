@@ -11,7 +11,7 @@ train:
     lr: 1.0e-3
   early_stopping:
     enabled: true
-    patience: 1000
+    patience: 10000
     min_delta: 1.0e-5
   loss_weights:
     f: 1.0    # PDE residual
@@ -29,17 +29,21 @@ eval:
     nx: 200
     ny: 200
     nt: 100
+  every: 100
 gradflow:
   enabled: true
-  every: 1000
-  store_vectors: true      # must be true if you want KDE
+  every: 200
+  store_vectors: true    # must be true if you want KDE
   wandb_hist: false
-  max_keep: 20
+  max_keep: 20  # how many vectors to keep
+  stop_at: 10000
   plot:
     enabled: true          # <-- toggle all plotting
-    kde: true              # KDE of latest vectors per layer (paper-style)
+    kde: true              # KDE of latest vectors per layer (paper-style) (KDE: kernel density estimation)
     stats: true            # time-series curves of mean/max/L2 per layer
     losses: ["bc", "res"]  # which losses to compare
+    loss_kde: true
+    loss_kde_filename: "gradflow_kde_losses.png"
     kde_filename: "gradflow_kde.png"
     stats_prefix: "gradflow_stats"
     max_cols: 4            # subplots per row
