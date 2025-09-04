@@ -1,4 +1,4 @@
-import os, numpy as np, torch, matplotlib.pyplot as plt
+import os, csv, numpy as np, torch, matplotlib.pyplot as plt
 
 def _ensure_dir(p): os.makedirs(p, exist_ok=True)
 
@@ -43,3 +43,32 @@ def save_plots_2d(x, y, u_true, u_pred, out_dir, prefix):
         fig.savefig(path, dpi=150, bbox_inches="tight"); plt.close(fig)
         paths[f"{prefix}_{name}"] = path
     return paths
+
+def plot_weights_over_time(csv_path: str, out_path: str) -> str:
+    """
+    csv format:
+      step,res,bc,ic[,data...]
+      0,0.33,0.33,0.34
+      1,0.40,0.30,0.30
+      ...
+    """
+    steps, series = [], {}
+    with open(csv_path, "r", newline="") as f:
+        reader = csv.DictReader(f)
+        headers = reader.fieldnames or []
+        terms = [h for h in headers if h != "step"]
+        for row in reader:
+            steps.append(int(row["step"]))
+            for t in terms:
+                series.setdefault(t, []).append(float(row[t]))
+    fig = plt.figure()                              # single-plot only
+    for t, ys in series.items():
+        plt.plot(steps, ys, label=t)                # no colors specified
+    plt.xlabel("Step (epoch)")
+    plt.ylabel("Normalized loss weight")
+    plt.title("Loss weight evolution")
+    plt.legend()
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return out_path

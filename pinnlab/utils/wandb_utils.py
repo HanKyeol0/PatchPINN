@@ -14,10 +14,15 @@ def setup_wandb(cfg, args, out_dir, config):
         class Dummy: pass
         return Dummy()
 
-def wandb_log(d): 
+def wandb_log(d, step=None, commit=True):
     try:
-        import wandb; wandb.log(d)
-    except: pass
+        import wandb
+        if step is None:
+            wandb.log(d, commit=commit)                # fallback (not recommended)
+        else:
+            wandb.log(d, step=int(step), commit=commit)
+    except Exception:
+        pass
 
 def wandb_finish():
     try:

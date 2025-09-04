@@ -1,4 +1,4 @@
-import os, json, math, numpy as np, torch, re, matplotlib.pyplot as plt, seaborn as sns
+import os, json, math, numpy as np, torch, re, matplotlib.pyplot as plt, seaborn as sns, wandb
 from collections import OrderedDict
 
 def _ensure_dir(p): os.makedirs(p, exist_ok=True)
@@ -213,9 +213,11 @@ class GradientFlowLogger:
 
                 if self.wandb_hist:
                     try:
-                        import wandb
-                        wandb.log({f"gradflow/hist/{loss_name}/{layer_name}":
-                                   wandb.Histogram(g_flat.detach().cpu().numpy())})
+                        wandb.log(
+                            {f"gradflow/hist/{loss_name}/{layer_name}": wandb.Histogram(g_flat.detach().cpu().numpy())},
+                            step=int(step) if step is not None else None,
+                            commit=False
+                        )
                     except Exception:
                         pass
 

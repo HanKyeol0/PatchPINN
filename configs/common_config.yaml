@@ -1,22 +1,39 @@
-seed: 42
+seed: 40
 device: "cuda"            # "cuda" or "cpu"
 train:
   epochs: 20000
   batch:
-    n_f: 8192             # collocation points
-    n_b: 2048             # boundary points
-    n_0: 2048             # initial points (if applicable)
+    n_f: 4096             # collocation points
+    n_b: 1024             # boundary points
+    n_0: 1024             # initial points (if applicable)
   optimizer:
     name: adam
     lr: 1.0e-3
   early_stopping:
     enabled: true
-    patience: 10000
+    patience: 20000
     min_delta: 1.0e-5
   loss_weights:
-    f: 1.0    # PDE residual
-    b: 10.0   # boundary
+    res: 1.0    # PDE residual
+    bc: 10.0   # boundary
     ic: 10.0  # initial
+  loss_balancer:
+    use_loss_balancer: true
+    kind: softadapt        # one of: none | uncertainty | dwa | softadapt | gradnorm
+    terms: [res, bc, ic]
+    # DWA:
+    T: 2.0
+    # SoftAdapt:
+    beta: 10.0
+    ewma_alpha: 0.7
+    # Uncertainty:
+    init_log_sigma: 0.0
+    # GradNorm-Lite:
+    alpha: 0.12
+    gamma: 0.5
+    update_every: 10
+    # If you want a specific layer for GradNorm-Lite (string match in param name):
+    # ref_layer_name: "layers.-1.weight"
 log:
   out_dir: "outputs"
   wandb:
