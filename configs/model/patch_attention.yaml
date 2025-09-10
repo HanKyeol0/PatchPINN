@@ -1,0 +1,18 @@
+model_name: attn_patch
+in_features: 3           # (x,y,t) or 2 for steady 2D
+out_features: 1
+
+d_model: 128
+nhead: 8
+num_layers: 4
+ff_multiplier: 4.0
+dropout: 0.0
+activation: tanh
+
+fourier:
+  enabled: true
+  m: 32
+  sigma: 1.0
+  concat_input: true
+
+head_hidden: 128

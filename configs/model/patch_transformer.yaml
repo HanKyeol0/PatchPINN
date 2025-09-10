@@ -1,0 +1,9 @@
+# configs/model/patch_pinn.yaml
+in_features: 2
+out_features: 1
+d_model: 128
+n_heads: 4
+depth: 6
+ff_mult: 4
+dropout: 0.0
+fourier_features: { enabled: true, m: 64, sigma: 10.0 }

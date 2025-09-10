@@ -1,0 +1,23 @@
+experiment_name: poisson2d_patch
+in_features: 3
+out_features: 1
+time_dependent: true
+kappa: 1.0
+lambda: auto
+domain:
+  x: [0.0, 1.0]
+  y: [0.0, 1.0]
+  t: [0.0, 1.0]
+grid:
+  nx: 129
+  ny: 129
+  nt: 33
+patch:
+  kx: 17
+  ky: 17
+  sx: 8
+  sy: 8
+  kt: 3
+  st: 1
+  pad_mode_xy: zero
+  pad_mode_t: zero
