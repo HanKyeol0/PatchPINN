@@ -2,8 +2,6 @@
 from pinnlab.models.mlp import MLP
 from pinnlab.models.fourier_mlp import FourierMLP
 from pinnlab.models.residual_network import ResidualNetwork
-from pinnlab.models.patch_transformer import PatchTransformer
-from pinnlab.models.patch_attention import PatchAttention
 
 # experiments
 from pinnlab.experiments.burgers1d import Burgers1D
@@ -17,15 +15,10 @@ from pinnlab.experiments.reactiondiffusion2d import ReactionDiffusion2D
 from pinnlab.experiments.allencahn1d import AllenCahn1D
 from pinnlab.experiments.allencahn2d import AllenCahn2D
 
-# patch-based experiment
-from pinnlab.experiments.poisson2d_patch import Poisson2D_Patch
-
 _MODEL_REG = {
     "mlp": MLP,
     "fourier_mlp": FourierMLP,
     "residual_network": ResidualNetwork,
-    "patch_transformer": PatchTransformer,
-    "patch_attention": PatchAttention,
 }
 
 _EXP_REG = {
@@ -39,7 +32,6 @@ _EXP_REG = {
     "reactiondiffusion2d": ReactionDiffusion2D,
     "allencahn1d": AllenCahn1D,
     "allencahn2d": AllenCahn2D,
-    "poisson2d_patch": Poisson2D_Patch,
 }
 
 def get_model(name):     return _MODEL_REG[name]
