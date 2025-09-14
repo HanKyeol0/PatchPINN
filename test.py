@@ -1,16 +1,7 @@
-import torch
+# pinnlab/data/samplers.py  (append this)
+
 from typing import Callable, Dict, List, Optional, Tuple, Union
-
-def concat_time(X, t):
-    if t is None: return X
-    if X.dim()==1: X = X[:,None]
-    if t.dim()==1: t = t[:,None]
-    if X.shape[0] != t.shape[0]:
-        t = t.expand(X.shape[0], -1)
-    return torch.cat([X, t], dim=1)
-
-def uniform_time(n, t0, t1, device):
-    return torch.rand(n,1,device=device)*(t1-t0)+t0
+import torch
 
 def sample_patches_2d_steady(
     x_min: float, x_max: float,
@@ -158,3 +149,23 @@ def sample_patches_2d_steady(
         "true_boundary": boundary_values,  # List[[P,1]] with NaNs, or None if boundary_fn is None
     }
     return out
+
+def g_dirichlet(x, y):
+    # Example boundary condition u = sin(pi x) + cos(pi y)
+    import math
+    return torch.sin(math.pi * x) + torch.cos(math.pi * y)
+
+batch = sample_patches_2d_steady(
+    0.0, 1.0, 0.0, 1.0,
+    patch_x=3, patch_y=3,
+    grid_x=10, grid_y=10,
+    device="cuda" if torch.cuda.is_available() else "cpu",
+    stride_x=1,
+    stride_y=1,
+    boundary_fn=g_dirichlet
+)
+
+x_f = batch["interior_patches"]      # list of [P,2]
+x_b = batch["boundary_patches"]      # list of {"coords":[P,2], "boundary_mask":[P], ...}
+u_b = batch["true_boundary"]         # list of [P,1] (NaN for non-boundary)
+
