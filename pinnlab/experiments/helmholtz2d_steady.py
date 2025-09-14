@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from pinnlab.experiments.base import BaseExperiment, make_leaf, grad_sum
 from pinnlab.data.geometries import Rectangle, linspace_2d
+from pinnlab.utils.plotting import save_plots_2d
 
 class Helmholtz2DSteady(BaseExperiment):
     """
@@ -95,7 +96,6 @@ class Helmholtz2DSteady(BaseExperiment):
         return rel.item()
 
     def plot_final(self, model, grid_cfg, out_dir):
-        from pinnlab.utils.plotting import save_plots_2d
         nx, ny = grid_cfg["nx"], grid_cfg["ny"]
         Xg, Yg = linspace_2d(self.rect.xa, self.rect.xb, self.rect.ya, self.rect.yb,
                              nx, ny, self.rect.device)
