@@ -125,24 +125,85 @@ class Helmholtz2dSteady_patch(BaseExperiment):
 
     def initial_loss(self, model, batch):
         return torch.tensor(0.0, device=self.device)
-    
-    # ---- eval & plot (same spirit as point-wise version) ----
+
+    def _predict_grid_via_patches(self, model, nx: int, ny: int):
+        """
+        Produce a dense prediction U_pred[nx, ny] by sliding fixed-size patches
+        of points and averaging overlaps. Works even when (nx-1) % px != 0 or
+        (ny-1) % py != 0 by clamping indices at the domain boundary.
+
+        Model is called on tensors shaped [P,2] where P=(px+1)*(py+1).
+        """
+        device = self.device
+        # Make evaluation grid coordinates
+        Xg, Yg = linspace_2d(self.xa, self.xb, self.ya, self.yb, nx, ny, device)  # [nx,ny] each
+        xs = Xg[:, 0]  # xs[i] == Xg[i,0]
+        ys = Yg[0, :]  # ys[j] == Yg[0,j]
+
+        px, py = self.px, self.py             # in *cells*
+        gx, gy = nx - 1, ny - 1               # number of cells along each axis
+        # Tile starts in *cell* indices (stride = patch size)
+        starts_x = list(range(0, gx + 1, px))
+        starts_y = list(range(0, gy + 1, py))
+
+        # Accumulators for overlap-averaging
+        S = torch.zeros(nx, ny, device=device)   # sum of predictions
+        W = torch.zeros(nx, ny, device=device)   # counts (weights)
+
+        with torch.no_grad():
+            for ix0 in starts_x:
+                # indices in *point* space for this patch (clamped to grid)
+                ix_vec = torch.arange(ix0, ix0 + px + 1, device=device)
+                ix_vec = ix_vec.clamp_(0, gx)  # length px+1
+                x_coords = xs[ix_vec]          # [px+1]
+
+                for iy0 in starts_y:
+                    iy_vec = torch.arange(iy0, iy0 + py + 1, device=device)
+                    iy_vec = iy_vec.clamp_(0, gy)  # length py+1
+                    y_coords = ys[iy_vec]          # [py+1]
+
+                    XX, YY = torch.meshgrid(x_coords, y_coords, indexing="ij")  # [px+1, py+1]
+                    coords = torch.stack([XX.reshape(-1), YY.reshape(-1)], dim=1)  # [P,2]
+
+                    # Model expects a fixed-size patch [P,2]
+                    U_patch = model(coords).reshape(px + 1, py + 1).squeeze(-1)   # [px+1, py+1]
+
+                    # Scatter-add into the global grid (average overlaps)
+                    # (Handles clamped duplicates at edges automatically via W.)
+                    for a in range(px + 1):
+                        ix = int(ix_vec[a].item())
+                        for b in range(py + 1):
+                            iy = int(iy_vec[b].item())
+                            S[ix, iy] += U_patch[a, b]
+                            W[ix, iy] += 1.0
+
+        # Avoid divide-by-zero (shouldn't happen, but be safe)
+        W = torch.where(W > 0, W, torch.ones_like(W))
+        U_pred = S / W  # [nx, ny]
+        return Xg, Yg, U_pred
+
+    # ---- evaluation: relative L2 using patch-based inference ----
     def relative_l2_on_grid(self, model, grid_cfg):
         nx, ny = grid_cfg["nx"], grid_cfg["ny"]
-        Xg, Yg = linspace_2d(self.xa, self.xb, self.ya, self.yb, nx, ny, self.device)
-        XY = torch.stack([Xg.reshape(-1), Yg.reshape(-1)], dim=1)
+        Xg, Yg, U_pred = self._predict_grid_via_patches(model, nx, ny)
         with torch.no_grad():
-            U_pred = model(XY).reshape(nx, ny)
-            U_true = self.u_star(Xg, Yg)
-        rel = torch.linalg.norm((U_pred - U_true).reshape(-1)) / torch.linalg.norm(U_true.reshape(-1))
-        return rel.item()
+            U_true = self.u_star(Xg, Yg)                 # [nx,ny]
+            num = torch.linalg.norm((U_pred - U_true).reshape(-1))
+            den = torch.linalg.norm(U_true.reshape(-1))
+            return (num / den).item()
 
+    # ---- plotting: also using patch-based inference ----
     def plot_final(self, model, grid_cfg, out_dir):
+        from pinnlab.utils.plotting import save_plots_2d
         nx, ny = grid_cfg["nx"], grid_cfg["ny"]
-        Xg, Yg = linspace_2d(self.xa, self.xb, self.ya, self.yb, nx, ny, self.device)
-        XY = torch.stack([Xg.reshape(-1), Yg.reshape(-1)], dim=1)
+        Xg, Yg, U_pred = self._predict_grid_via_patches(model, nx, ny)
         with torch.no_grad():
-            U_pred = model(XY).reshape(nx, ny).cpu().numpy()
-            U_true = self.u_star(Xg, Yg).cpu().numpy()
-        return save_plots_2d(Xg.cpu().numpy(), Yg.cpu().numpy(), U_true, U_pred,
-                             out_dir, "helmholtz2d_steady_patch")
+            U_true = self.u_star(Xg, Yg)
+        return save_plots_2d(
+            Xg.detach().cpu().numpy(),
+            Yg.detach().cpu().numpy(),
+            U_true.detach().cpu().numpy(),
+            U_pred.detach().cpu().numpy(),
+            out_dir,
+            "helmholtz2d_steady_patch"
+        )
