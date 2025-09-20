@@ -1,12 +1,12 @@
 import math
 import numpy as np
 import torch
-from pinnlab.experiments.base import BaseExperiment, make_leaf, grad_sum
+from pinnlab.experiments.base_patch import BaseExperiment_Patch, make_leaf, grad_sum
 from pinnlab.data.geometries import Rectangle, linspace_2d
 from pinnlab.data.samplers import sample_patches_2d_steady
 from pinnlab.utils.plotting import save_plots_2d
 
-class Helmholtz2dSteady_patch(BaseExperiment):
+class Helmholtz2DSteady_patch(BaseExperiment_Patch):
     def __init__(self, cfg, device):
         super().__init__(cfg, device)
         self.xa, self.xb = cfg["domain"]["x"]
@@ -38,7 +38,6 @@ class Helmholtz2dSteady_patch(BaseExperiment):
         # boundary condition
         def g_dirichlet(x, y):
             # Example boundary condition u = sin(pi x) + cos(pi y)
-            import math
             return torch.sin(math.pi * x) + torch.cos(math.pi * y)
 
         x_f, x_b, u_b = sample_patches_2d_steady(
@@ -57,8 +56,6 @@ class Helmholtz2dSteady_patch(BaseExperiment):
         device = self.device
 
         for coords in batch["X_f"]:
-            if coords.numel() == 0:
-                continue
             X = make_leaf(coords)
             u = model(X)
             du = grad_sum(u, X)
@@ -122,9 +119,6 @@ class Helmholtz2dSteady_patch(BaseExperiment):
             return torch.tensor(0.0, device=device)
         
         return torch.cat(errs,dim=0)
-
-    def initial_loss(self, model, batch):
-        return torch.tensor(0.0, device=self.device)
 
     def _predict_grid_via_patches(self, model, nx: int, ny: int):
         """

@@ -130,15 +130,15 @@ def main(args):
     )
     gf_stop = base_cfg["gradflow"]["stop_at"]
 
-    x_f, x_b, u_b = exp.sample_patches()
+    patches = exp.sample_patches() # {"X_f": x_f, "X_b": x_b, "u_b": u_b}
 
     for ep in pbar:
         model.train()
-        batch = exp.sample_batch(n_f=n_f, n_b=n_b, n_0=n_0)
+        # batch = exp.sample_batch(n_f=n_f, n_b=n_b, n_0=n_0)
 
-        loss_res = exp.pde_residual_loss(model, batch).mean() if batch.get("X_f") is not None else torch.tensor(0., device=device)
-        loss_bc = exp.boundary_loss(model, batch).mean()     if batch.get("X_b") is not None else torch.tensor(0., device=device)
-        loss_ic = exp.initial_loss(model, batch).mean()      if batch.get("X_0") is not None else torch.tensor(0., device=device)
+        loss_res = exp.pde_residual_loss(model, patches).mean() if patches.get("X_f") is not None else torch.tensor(0., device=device)
+        loss_bc = exp.boundary_loss(model, patches).mean()     if patches.get("X_b") is not None else torch.tensor(0., device=device)
+        loss_ic = exp.initial_loss(model, patches).mean()      if patches.get("X_0") is not None else torch.tensor(0., device=device)
 
         loss_res_s = loss_res.mean() if torch.is_tensor(loss_res) and loss_res.dim() > 0 else loss_res # scalar
         loss_bc_s = loss_bc.mean() if torch.is_tensor(loss_bc) and loss_bc.dim() > 0 else loss_bc

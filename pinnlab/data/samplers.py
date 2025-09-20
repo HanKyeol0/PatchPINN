@@ -101,6 +101,8 @@ def sample_patches_2d_steady(
             XX, YY = torch.meshgrid(xs[px_idx], ys[py_idx], indexing="ij")   # [nxp, nyp]
             coords = torch.stack([XX.reshape(-1), YY.reshape(-1)], dim=1)    # [P,2]
 
+            # print(coords)
+
             # print("---XX---")
             # print(XX)
             # print("---YY---")
@@ -142,15 +144,15 @@ def sample_patches_2d_steady(
                         vals = boundary_fn(xb, yb)  # expected shape [Nb,1]
                         if vals.dim() == 1: vals = vals[:, None]
                         ub[boundary_mask] = vals
-                    print("---ub---")
-                    print(ub)
+                    # print("---ub---")
+                    # print(ub)
                     boundary_values.append(ub)  # [P,1] with NaNs at interior points
             else:
                 # Pure interior patch
                 interior_patches.append(coords)           # [P,2]
 
-    print("---boundary_values---")
-    print(boundary_values)
+    # print("---boundary_values---")
+    # print(boundary_values)
 
     out: Dict[str, Union[List[torch.Tensor], List[Dict[str, torch.Tensor]]]] = {
         "interior_patches": interior_patches,
