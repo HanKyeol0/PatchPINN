@@ -40,7 +40,7 @@ class Helmholtz2DSteady_patch(BaseExperiment_Patch):
             # Example boundary condition u = sin(pi x) + cos(pi y)
             return torch.sin(math.pi * x) + torch.cos(math.pi * y)
 
-        x_f, x_b, u_b = sample_patches_2d_steady(
+        out = sample_patches_2d_steady(
             self.xa, self.xb,
             self.ya, self.yb,
             self.px, self.py,
@@ -49,28 +49,43 @@ class Helmholtz2DSteady_patch(BaseExperiment_Patch):
             stride_x=1, stride_y=1,
             boundary_fn=g_dirichlet,
         )
+        x_f, x_b, u_b = out["interior_patches"], out["boundary_patches"], out["true_boundary"]
+        return x_f, x_b, u_b
+    
+    def sample_batch(self, *_, **__):
+        x_f, x_b, u_b = self.sample_patches()
+
+        # Guards to catch type slips early
+        assert isinstance(x_f, list) and (len(x_f) == 0 or torch.is_tensor(x_f[0])), \
+            f"X_f must be List[Tensor], got {type(x_f)}"
+        assert isinstance(x_b, list) and (len(x_b) == 0 or isinstance(x_b[0], dict)), \
+            f"X_b must be List[Dict], got {type(x_b)}"
+        if u_b is not None:
+            assert isinstance(u_b, list), f"u_b must be List[Tensor] or None, got {type(u_b)}"
+
         return {"X_f": x_f, "X_b": x_b, "u_b": u_b}
     
     def pde_residual_loss(self, model, batch):
         errs = []
         device = self.device
 
-        for coords in batch["X_f"]:
-            X = make_leaf(coords)
-            u = model(X)
-            du = grad_sum(u, X)
+        # interior-only patches
+        for coords in batch.get("X_f", []) or []:
+            X = make_leaf(coords)                    # [P,2]
+            u = model(X)                             # [P,1]
+            du = grad_sum(u, X)                      # [P,2]
             u_x, u_y = du[:, 0:1], du[:, 1:2]
             d2ux = grad_sum(u_x, X)
             d2uy = grad_sum(u_y, X)
             u_xx, u_yy = d2ux[:, 0:1], d2uy[:, 1:2]
             res_pred = u_xx + u_yy + self.lam * u
             f_xy = self.f(X[:, 0:1], X[:, 1:2])
-            return (res_pred - f_xy).pow(2)
-        
-        for patch in batch["X_b"]:
-            coords = patch["coords"]
-            mask = patch["boundary_mask"]
+            errs.append((res_pred - f_xy).pow(2))
 
+        # interior-part of boundary patches
+        for patch in batch.get("X_b", []) or []:
+            coords = patch["coords"]
+            mask   = patch["boundary_mask"]
             if (~mask).any():
                 X_int = make_leaf(coords[~mask])
                 u = model(X_int)
@@ -82,43 +97,45 @@ class Helmholtz2DSteady_patch(BaseExperiment_Patch):
                 res_pred = u_xx + u_yy + self.lam * u
                 f_xy = self.f(X_int[:, 0:1], X_int[:, 1:2])
                 errs.append((res_pred - f_xy).pow(2))
-            
-            if len(errs) == 0:
-                return torch.tensor(0.0, device=device)
-            
-            return torch.cat(errs, dim=0)
-    
+
+        if len(errs) == 0:
+            return torch.tensor(0.0, device=device)
+        return torch.cat(errs, dim=0)
+
     def boundary_loss(self, model, batch):
         device = self.device
-        boundary_patches = batch["X_b"]
-        u_b_list = batch["u_b"]
+        boundary_patches = batch.get("X_b", []) or []
+        u_b_list = batch.get("u_b", None)
 
         errs = []
         for i, patch in enumerate(boundary_patches):
             coords = patch["coords"]
-            mask = patch["boundary_mask"]
+            mask   = patch["boundary_mask"]
             if not mask.any():
                 continue
-            model(coords)
+
             Xb = coords[mask]
-            pred = model(Xb)
+            pred = model(Xb)  # [Nb,1]
 
-            ub_full = u_b_list[i]
-            if ub_full.dim() == 1:
-                ub_full = ub_full[:, None]
-            ub = ub_full[mask]
+            if u_b_list is not None and u_b_list[i] is not None:
+                ub_full = u_b_list[i]
+                if ub_full.dim() == 1:
+                    ub_full = ub_full[:, None]
+                ub = ub_full[mask]  # [Nb,1]
+            else:
+                ub = self.u_star(Xb[:, 0:1], Xb[:, 1:2])
 
+            # Drop any NaNs defensively
             if torch.isnan(ub).any():
                 valid = ~torch.isnan(ub.squeeze(1))
                 if valid.any():
                     errs.append((pred[valid] - ub[valid]).pow(2))
             else:
-                errs.append((pred-ub).power(2))
-    
+                errs.append((pred - ub).pow(2))   # <- fixed .pow
+
         if len(errs) == 0:
             return torch.tensor(0.0, device=device)
-        
-        return torch.cat(errs,dim=0)
+        return torch.cat(errs, dim=0)
 
     def _predict_grid_via_patches(self, model, nx: int, ny: int):
         """

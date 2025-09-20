@@ -81,8 +81,9 @@ class PatchAttention(nn.Module):
     def __init__(self, cfg: Dict[str, Any]):
         super().__init__()
         patch = cfg.get("patch", {})
-        self.px = int(patch.get("x", cfg.get("patch_x", 0)))
-        self.py = int(patch.get("y", cfg.get("patch_y", 0)))
+        self.px = int(patch.get("x"))
+        self.py = int(patch.get("y"))
+        print("self.px, self.py:", self.px, self.py)
         assert self.px > 0 and self.py > 0, "Provide model.patch.x and model.patch.y (>0)."
         self.P  = (self.px + 1) * (self.py + 1)
 

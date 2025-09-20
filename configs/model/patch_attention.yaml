@@ -4,8 +4,8 @@ in_features: 2
 out_features: 1
 
 patch:
-  x: 20          # cells in x (points per patch in x = 21)
-  y: 16          # cells in y (points per patch in y = 17)
+  x: 2         # cells in x (points per patch in x = 21)
+  y: 2          # cells in y (points per patch in y = 17)
 
 activation: relu # or relu, tanh, sine (supported via get_act)
 hidden_dim: 64

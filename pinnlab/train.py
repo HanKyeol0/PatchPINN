@@ -130,7 +130,7 @@ def main(args):
     )
     gf_stop = base_cfg["gradflow"]["stop_at"]
 
-    patches = exp.sample_patches() # {"X_f": x_f, "X_b": x_b, "u_b": u_b}
+    patches = exp.sample_batch() # {"X_f": x_f, "X_b": x_b, "u_b": u_b}
 
     for ep in pbar:
         model.train()
