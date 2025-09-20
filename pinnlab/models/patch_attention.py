@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .mlp import get_act  # reuse your activation picker
+from .activation import get_act
 
 class RelPosBias(nn.Module):
     """MLP mapping (dx,dy) -> scalar bias for attention logits."""

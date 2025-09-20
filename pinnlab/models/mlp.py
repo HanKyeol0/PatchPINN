@@ -1,15 +1,8 @@
 import torch, torch.nn as nn
 import math
 
-def get_act(name):
-    name = name.lower()
-    if name == "tanh": return nn.Tanh()
-    if name == "relu": return nn.ReLU()
-    if name == "sine":
-        class Sine(nn.Module):
-            def forward(self, x): return torch.sin(x)
-        return Sine()
-    raise ValueError(f"Unknown activation {name}")
+from .activation import get_act
+
 
 class MLP(nn.Module):
     def __init__(self, cfg):
