@@ -5,8 +5,8 @@ patch:
   x: 3
   y: 3
 grid:
-  x: 240
-  y: 240
+  x: 30
+  y: 30
 a1: 1.0
 a2: 4.0
 lambda: 1.0

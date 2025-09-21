@@ -132,8 +132,12 @@ def main(args):
 
     patches = exp.sample_batch() # {"X_f": x_f, "X_b": x_b, "u_b": u_b}
 
+    print("training started")
+
     for ep in pbar:
         model.train()
+
+        print(f"ep: {ep}")
         # batch = exp.sample_batch(n_f=n_f, n_b=n_b, n_0=n_0)
 
         loss_res = exp.pde_residual_loss(model, patches).mean() if patches.get("X_f") is not None else torch.tensor(0., device=device)

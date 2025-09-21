@@ -72,6 +72,7 @@ class Helmholtz2DSteady_patch(BaseExperiment_Patch):
         # interior-only patches
         for coords in batch.get("X_f", []) or []:
             X = make_leaf(coords)                    # [P,2]
+            # print("PDE residual interior input:", X.shape)
             u = model(X)                             # [P,1]
             du = grad_sum(u, X)                      # [P,2]
             u_x, u_y = du[:, 0:1], du[:, 1:2]
@@ -88,6 +89,7 @@ class Helmholtz2DSteady_patch(BaseExperiment_Patch):
             mask   = patch["boundary_mask"]
             if (~mask).any():
                 X_int = make_leaf(coords[~mask])
+                # print("PDE residual boundary input:", X_int.shape)
                 u = model(X_int)
                 du = grad_sum(u, X_int)
                 u_x, u_y = du[:, 0:1], du[:, 1:2]
@@ -98,7 +100,7 @@ class Helmholtz2DSteady_patch(BaseExperiment_Patch):
                 f_xy = self.f(X_int[:, 0:1], X_int[:, 1:2])
                 errs.append((res_pred - f_xy).pow(2))
 
-        if len(errs) == 0:
+        if len(errs) == 0:  
             return torch.tensor(0.0, device=device)
         return torch.cat(errs, dim=0)
 
@@ -115,6 +117,7 @@ class Helmholtz2DSteady_patch(BaseExperiment_Patch):
                 continue
 
             Xb = coords[mask]
+            # print("boundary loss input:", Xb.shape)
             pred = model(Xb)  # [Nb,1]
 
             if u_b_list is not None and u_b_list[i] is not None:

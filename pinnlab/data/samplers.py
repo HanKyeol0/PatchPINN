@@ -70,9 +70,9 @@ def sample_patches_2d_steady(
     """
     device = torch.device(device)
 
-    # Global grid (points = divisions + 1)
-    nx_pts = grid_x + 1
-    ny_pts = grid_y + 1
+    # Global grid
+    nx_pts = grid_x
+    ny_pts = grid_y
     xs = torch.linspace(x_min, x_max, nx_pts, device=device)
     ys = torch.linspace(y_min, y_max, ny_pts, device=device)
 
@@ -86,8 +86,8 @@ def sample_patches_2d_steady(
 
     # Slide patches over the *cell* index space [0..grid_x-1] × [0..grid_y-1]
     # Each patch covers cells [ix0 .. ix1-1], points [ix0 .. ix1] (inclusive).
-    ix0s = list(range(0, grid_x - patch_x + 2, stride_x))
-    iy0s = list(range(0, grid_y - patch_y + 2, stride_y))
+    ix0s = list(range(0, grid_x - patch_x + 1, stride_x))
+    iy0s = list(range(0, grid_y - patch_y + 1, stride_y))
 
     for ix0 in ix0s:
         ix1 = ix0 + patch_x   # last cell index covered

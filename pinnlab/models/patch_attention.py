@@ -85,7 +85,7 @@ class PatchAttention(nn.Module):
         self.py = int(patch.get("y"))
         print("self.px, self.py:", self.px, self.py)
         assert self.px > 0 and self.py > 0, "Provide model.patch.x and model.patch.y (>0)."
-        self.P  = (self.px + 1) * (self.py + 1)
+        self.P  = (self.px) * (self.py)
 
         in_f   = int(cfg.get("in_features", 2))
         out_f  = int(cfg.get("out_features", 1))
@@ -129,8 +129,8 @@ class PatchAttention(nn.Module):
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         assert X.dim() == 2, f"Expected [P,in_features], got {tuple(X.shape)}"
-        P = X.shape[0]
-        assert P == self.P, f"Expected P={(self.P)} points, got P={P}."
+        # P = X.shape[0]
+        # assert P == self.P, f"Expected P={(self.P)} points, got P={P}."
         rel = self._pairwise_rel(X)  # [P,P,2]
         z = self.embed(X)
         for blk in self.blocks:
