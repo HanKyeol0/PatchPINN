@@ -79,8 +79,6 @@ def main(args):
                 writer = csv.writer(f)
                 writer.writerow(["step"] + weights_terms)
 
-    global_step = 0
-
     # WandB
     if base_cfg["log"]["wandb"]["enabled"]:
         wandb.login(key=os.getenv('WANDB_API_KEY'))
@@ -133,16 +131,15 @@ def main(args):
     patches = exp.sample_batch() # {"X_f": x_f, "X_b": x_b, "u_b": u_b}
 
     print("training started")
+    global_step = 1
 
     for ep in pbar:
         model.train()
 
-        print(f"ep: {ep}")
-        # batch = exp.sample_batch(n_f=n_f, n_b=n_b, n_0=n_0)
-
-        loss_res = exp.pde_residual_loss(model, patches).mean() if patches.get("X_f") is not None else torch.tensor(0., device=device)
-        loss_bc = exp.boundary_loss(model, patches).mean()     if patches.get("X_b") is not None else torch.tensor(0., device=device)
-        loss_ic = exp.initial_loss(model, patches).mean()      if patches.get("X_0") is not None else torch.tensor(0., device=device)
+        with torch.cuda.amp.autocast(dtype=torch.float16):
+            loss_res = exp.pde_residual_loss(model, patches).mean() if patches.get("X_f") is not None else torch.tensor(0., device=device)
+            loss_bc = exp.boundary_loss(model, patches).mean()     if patches.get("X_b") is not None else torch.tensor(0., device=device)
+            loss_ic = exp.initial_loss(model, patches).mean()      if patches.get("X_0") is not None else torch.tensor(0., device=device)
 
         loss_res_s = loss_res.mean() if torch.is_tensor(loss_res) and loss_res.dim() > 0 else loss_res # scalar
         loss_bc_s = loss_bc.mean() if torch.is_tensor(loss_bc) and loss_bc.dim() > 0 else loss_bc
@@ -176,8 +173,6 @@ def main(args):
         total_loss.backward()
         optimizer.step()
 
-        global_step += 1
-
         # Log
         log_dict = {
             "loss/total": total_loss.item(),
@@ -187,21 +182,22 @@ def main(args):
             "lr": optimizer.param_groups[0]["lr"],
             "epoch": ep
         }
-        wandb_log(log_dict, step=global_step, commit=False)
-        pbar.set_postfix({k: f"{v:.3e}" for k,v in log_dict.items() if "loss" in k})
+
         log_payload = {"loss/total": float(total_loss.detach().cpu())}
         log_payload.update(w_dict)
         log_payload.update(aux)        # e.g., sigma values for uncertainty scheme
         for k, v in losses.items():
             log_payload[f"loss/{k}"] = float(v.detach().cpu())
-        wandb_log(log_payload, step=global_step, commit=True)
+
+        # Combine all metrics
+        all_metrics = {**log_dict, **log_payload}
 
         # Simple validation metric (relative L2 on a fixed grid)
         best_path = os.path.join(out_dir, "best.pt")
         if ep % eval_every == 0 or ep == epochs-1:
             with torch.no_grad():
                 rel_l2 = exp.relative_l2_on_grid(model, base_cfg["eval"]["grid"])
-            wandb_log({"eval/rel_l2": rel_l2, "epoch": ep}, step=global_step)
+            all_metrics["eval/rel_l2"] = rel_l2
 
             if rel_l2 < (best_metric - es_cfg.get("min_delta", 0.0)):
                 best_metric = rel_l2
@@ -211,6 +207,12 @@ def main(args):
             if early and early.step(rel_l2):
                 print(f"\n[EarlyStopping] Stopping at epoch {ep}. Best rel_l2={best_metric:.3e}")
                 break
+
+        # Log everything for this step at once
+        wandb_log(all_metrics, step=global_step, commit=True)
+        pbar.set_postfix({k: f"{v:.3e}" for k,v in all_metrics.items() if "loss" in k})
+
+        global_step += 1
 
     weights_png = os.path.join(out_dir, "loss_weights.png")
     plot_weights_over_time(weights_csv, weights_png)

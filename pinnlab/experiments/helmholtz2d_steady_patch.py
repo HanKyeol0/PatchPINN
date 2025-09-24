@@ -6,6 +6,33 @@ from pinnlab.data.geometries import Rectangle, linspace_2d
 from pinnlab.data.samplers import sample_patches_2d_steady
 from pinnlab.utils.plotting import save_plots_2d
 
+# ---- local safe grad helpers (avoid import confusion) ----
+def _grad_sum_allow_unused(y: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+    """
+    Safe dy/dx via sum-of-outputs trick.
+    If autograd reports 'unused' (returns None), we return (x*0),
+    which is identically zero but still connected to x so it requires grad.
+    """
+    (g,) = torch.autograd.grad(
+        y, x,
+        grad_outputs=torch.ones_like(y),
+        create_graph=True,
+        retain_graph=True,
+        allow_unused=True,
+    )
+    if g is None:
+        g = x * 0          # zero with dependency on x (requires_grad=True)
+    return g
+
+def _ensure_leaf_requires_grad(x: torch.Tensor) -> torch.Tensor:
+    # Make sure x is a leaf with requires_grad=True
+    return x.clone().detach().requires_grad_(True)
+
+# (optional) util already shown earlier
+def _iterate_in_chunks(self, lst, chunk):
+    for i in range(0, len(lst), chunk):
+        yield i, lst[i:i+chunk]
+
 class Helmholtz2DSteady_patch(BaseExperiment_Patch):
     def __init__(self, cfg, device):
         super().__init__(cfg, device)
@@ -14,6 +41,7 @@ class Helmholtz2DSteady_patch(BaseExperiment_Patch):
 
         self.px = cfg["patch"]["x"] # patch 크기
         self.py = cfg["patch"]["y"]
+        self.patch_size = self.px * self.py
 
         self.gx = cfg["grid"]["x"] # grid 격자 개수 (100이면 x축을 100개로 나누는 것)
         self.gy = cfg["grid"]["y"]
@@ -22,6 +50,64 @@ class Helmholtz2DSteady_patch(BaseExperiment_Patch):
         self.a2 = float(cfg.get("a2", 4.0))
         self.lam = float(cfg.get("lambda", 1.0))
         self.input_dim = 2  # (x,y)
+
+        self.batch_size = cfg["batch_size"]
+
+    def _gather_residual_patches(self, batch):
+        """
+        Build lists for residual computation.
+        Returns:
+        coords_list: List[Tensor [P,2]]
+        keep_mask_list: List[BoolTensor [P]]  (True = include in residual loss)
+        """
+        coords_list, keep_mask_list = [], []
+        P = self.patch_size
+        device = self.device
+
+        # 1) pure interior patches -> keep all points
+        for coords in batch.get("X_f", []) or []:
+            assert coords.shape[0] == P, f"Unexpected P in X_f: {coords.shape}"
+            coords_list.append(coords)
+            keep_mask_list.append(torch.ones(P, dtype=torch.bool, device=device))
+
+        # 2) boundary patches -> keep only interior points
+        for patch in batch.get("X_b", []) or []:
+            coords = patch["coords"]                    # [P,2]
+            bmask  = patch["boundary_mask"]             # [P] (True at boundary)
+            assert coords.shape[0] == P, f"Unexpected P in X_b: {coords.shape}"
+            coords_list.append(coords)
+            keep_mask_list.append(~bmask)               # keep interior rows only
+
+        return coords_list, keep_mask_list
+
+    def _gather_boundary_patches(self, batch):
+        """
+        Build lists for boundary loss.
+        Returns:
+        coords_list: List[Tensor [P,2]]
+        bmask_list:  List[BoolTensor [P]] (True = boundary)
+        u_b_list:    List[Optional[Tensor [P,1]]] (NaN for interior or None)
+        """
+        coords_list, bmask_list, ub_list = [], [], []
+        if batch.get("X_b", None) is None:
+            return coords_list, bmask_list, ub_list
+        for i, patch in enumerate(batch["X_b"]):
+            coords = patch["coords"]
+            bmask  = patch["boundary_mask"]
+            coords_list.append(coords)
+            bmask_list.append(bmask)
+            if batch.get("u_b", None) is not None and batch["u_b"][i] is not None:
+                ub = batch["u_b"][i]
+                if ub.dim() == 1:
+                    ub = ub[:, None]
+                ub_list.append(ub)  # [P,1] (NaN on interior points)
+            else:
+                ub_list.append(None)
+        return coords_list, bmask_list, ub_list
+    
+    def _iterate_in_chunks(self, lst, chunk):
+        for i in range(0, len(lst), chunk):
+            yield i, lst[i:i+chunk]
 
     def u_star(self, x, y):
         return torch.sin(self.a1 * math.pi * x) * torch.sin(self.a2 * math.pi * y)
@@ -66,79 +152,93 @@ class Helmholtz2DSteady_patch(BaseExperiment_Patch):
         return {"X_f": x_f, "X_b": x_b, "u_b": u_b}
     
     def pde_residual_loss(self, model, batch):
-        errs = []
         device = self.device
+        P = (self.px) * (self.py)
 
-        # interior-only patches
-        for coords in batch.get("X_f", []) or []:
-            X = make_leaf(coords)                    # [P,2]
-            # print("PDE residual interior input:", X.shape)
-            u = model(X)                             # [P,1]
-            du = grad_sum(u, X)                      # [P,2]
-            u_x, u_y = du[:, 0:1], du[:, 1:2]
-            d2ux = grad_sum(u_x, X)
-            d2uy = grad_sum(u_y, X)
-            u_xx, u_yy = d2ux[:, 0:1], d2uy[:, 1:2]
-            res_pred = u_xx + u_yy + self.lam * u
-            f_xy = self.f(X[:, 0:1], X[:, 1:2])
-            errs.append((res_pred - f_xy).pow(2))
-
-        # interior-part of boundary patches
-        for patch in batch.get("X_b", []) or []:
-            coords = patch["coords"]
-            mask   = patch["boundary_mask"]
-            if (~mask).any():
-                X_int = make_leaf(coords[~mask])
-                # print("PDE residual boundary input:", X_int.shape)
-                u = model(X_int)
-                du = grad_sum(u, X_int)
-                u_x, u_y = du[:, 0:1], du[:, 1:2]
-                d2ux = grad_sum(u_x, X_int)
-                d2uy = grad_sum(u_y, X_int)
-                u_xx, u_yy = d2ux[:, 0:1], d2uy[:, 1:2]
-                res_pred = u_xx + u_yy + self.lam * u
-                f_xy = self.f(X_int[:, 0:1], X_int[:, 1:2])
-                errs.append((res_pred - f_xy).pow(2))
-
-        if len(errs) == 0:  
+        coords_list, keep_mask_list = self._gather_residual_patches(batch)
+        if len(coords_list) == 0:
             return torch.tensor(0.0, device=device)
+
+        errs = []
+        bs = self.batch_size
+
+        for start, coords_chunk in self._iterate_in_chunks(coords_list, bs):
+            k_masks_chunk = keep_mask_list[start:start+len(coords_chunk)]   # List[Bool[P]]
+
+            # stack and prep for AD
+            C = torch.stack(coords_chunk, dim=0).to(device)                 # [B,P,2]
+            K = torch.stack(k_masks_chunk, dim=0).to(device)                # [B,P]
+            B = C.size(0)
+
+            X = _ensure_leaf_requires_grad(C)                               # leaf [B,P,2]
+            U = model(X).reshape(B, P, 1)                                   # [B,P,1]
+
+            # flatten for faster autograd calls
+            U_flat = U.view(B * P, 1)                                       # [BP,1]
+            X_flat = X.view(B * P, 2)                                       # [BP,2]
+
+            # first derivatives
+            dU  = _grad_sum_allow_unused(U_flat, X_flat).view(B, P, 2)      # [B,P,2]
+            u_x = dU[..., 0:1]                                              # [B,P,1]
+            u_y = dU[..., 1:2]                                              # [B,P,1]
+
+            # second derivatives
+            d2ux = _grad_sum_allow_unused(u_x.view(B * P, 1), X_flat).view(B, P, 2)
+            d2uy = _grad_sum_allow_unused(u_y.view(B * P, 1), X_flat).view(B, P, 2)
+            u_xx = d2ux[..., 0:1]                                           # [B,P,1]
+            u_yy = d2uy[..., 1:2]                                           # [B,P,1]
+
+            # residual
+            res_pred = (u_xx + u_yy + self.lam * U).squeeze(-1)             # [B,P]
+            f_xy    = self.f(X[..., 0], X[..., 1])                          # [B,P]
+
+            diff = (res_pred - f_xy)[K]                                     # 1-D masked
+            errs.append(diff.pow(2).unsqueeze(1))                           # [N_kept,1]
+
         return torch.cat(errs, dim=0)
 
     def boundary_loss(self, model, batch):
         device = self.device
-        boundary_patches = batch.get("X_b", []) or []
-        u_b_list = batch.get("u_b", None)
+
+        coords_list, bmask_list, ub_list = self._gather_boundary_patches(batch)
+        if len(coords_list) == 0:
+            return torch.tensor(0.0, device=device)
 
         errs = []
-        for i, patch in enumerate(boundary_patches):
-            coords = patch["coords"]
-            mask   = patch["boundary_mask"]
-            if not mask.any():
-                continue
+        bs = self.batch_size
 
-            Xb = coords[mask]
-            # print("boundary loss input:", Xb.shape)
-            pred = model(Xb)  # [Nb,1]
+        for start, coords_chunk in self._iterate_in_chunks(coords_list, bs):
+            bmask_chunk = bmask_list[start:start+len(coords_chunk)]
+            ub_chunk    = ub_list[start:start+len(coords_chunk)]
 
-            if u_b_list is not None and u_b_list[i] is not None:
-                ub_full = u_b_list[i]
-                if ub_full.dim() == 1:
-                    ub_full = ub_full[:, None]
-                ub = ub_full[mask]  # [Nb,1]
-            else:
-                ub = self.u_star(Xb[:, 0:1], Xb[:, 1:2])
+            C = torch.stack(coords_chunk, dim=0).to(device)     # [B,P,2]
+            B, P, _ = C.shape
 
-            # Drop any NaNs defensively
-            if torch.isnan(ub).any():
-                valid = ~torch.isnan(ub.squeeze(1))
-                if valid.any():
-                    errs.append((pred[valid] - ub[valid]).pow(2))
-            else:
-                errs.append((pred - ub).pow(2))   # <- fixed .pow
+            with torch.set_grad_enabled(False):
+                pred_full = model(C).squeeze(-1)                # [B,P]
 
-        if len(errs) == 0:
-            return torch.tensor(0.0, device=device)
-        return torch.cat(errs, dim=0)
+            # build target for the whole patch, then pick boundary rows
+            # (prefer sampler-provided u_b with NaNs for interior)
+            targets = []
+            for i in range(B):
+                mask_i = bmask_chunk[i].to(device)              # [P]
+                if ub_chunk[i] is not None:
+                    ub_full = ub_chunk[i].to(device).squeeze(-1)  # [P]
+                    ub_b = ub_full[mask_i]                        # [Nb]
+                else:
+                    # analytic Dirichlet
+                    Xi = C[i]
+                    ub_b = self.u_star(Xi[:, 0], Xi[:, 1])[mask_i]  # [Nb]
+                pred_b = pred_full[i][mask_i]                    # [Nb]
+                # Drop NaNs defensively
+                if torch.isnan(ub_b).any():
+                    valid = ~torch.isnan(ub_b)
+                    if valid.any():
+                        errs.append((pred_b[valid] - ub_b[valid]).pow(2).unsqueeze(1))
+                else:
+                    errs.append((pred_b - ub_b).pow(2).unsqueeze(1))
+
+        return torch.cat(errs, dim=0) if len(errs) > 0 else torch.tensor(0.0, device=device)
 
     def _predict_grid_via_patches(self, model, nx: int, ny: int):
         """
@@ -146,7 +246,7 @@ class Helmholtz2DSteady_patch(BaseExperiment_Patch):
         of points and averaging overlaps. Works even when (nx-1) % px != 0 or
         (ny-1) % py != 0 by clamping indices at the domain boundary.
 
-        Model is called on tensors shaped [P,2] where P=(px+1)*(py+1).
+        Model is called on tensors shaped [P,2] where P=(px)*(py).
         """
         device = self.device
         # Make evaluation grid coordinates
@@ -167,26 +267,26 @@ class Helmholtz2DSteady_patch(BaseExperiment_Patch):
         with torch.no_grad():
             for ix0 in starts_x:
                 # indices in *point* space for this patch (clamped to grid)
-                ix_vec = torch.arange(ix0, ix0 + px + 1, device=device)
-                ix_vec = ix_vec.clamp_(0, gx)  # length px+1
-                x_coords = xs[ix_vec]          # [px+1]
+                ix_vec = torch.arange(ix0, ix0 + px, device=device)
+                ix_vec = ix_vec.clamp_(0, gx)  # length px
+                x_coords = xs[ix_vec]          # [px]
 
                 for iy0 in starts_y:
-                    iy_vec = torch.arange(iy0, iy0 + py + 1, device=device)
-                    iy_vec = iy_vec.clamp_(0, gy)  # length py+1
-                    y_coords = ys[iy_vec]          # [py+1]
+                    iy_vec = torch.arange(iy0, iy0 + py, device=device)
+                    iy_vec = iy_vec.clamp_(0, gy)  # length py
+                    y_coords = ys[iy_vec]          # [py]
 
-                    XX, YY = torch.meshgrid(x_coords, y_coords, indexing="ij")  # [px+1, py+1]
+                    XX, YY = torch.meshgrid(x_coords, y_coords, indexing="ij")  # [px, py]
                     coords = torch.stack([XX.reshape(-1), YY.reshape(-1)], dim=1)  # [P,2]
 
                     # Model expects a fixed-size patch [P,2]
-                    U_patch = model(coords).reshape(px + 1, py + 1).squeeze(-1)   # [px+1, py+1]
+                    U_patch = model(coords).reshape(px, py).squeeze(-1)   # [px, py]
 
                     # Scatter-add into the global grid (average overlaps)
                     # (Handles clamped duplicates at edges automatically via W.)
-                    for a in range(px + 1):
+                    for a in range(px):
                         ix = int(ix_vec[a].item())
-                        for b in range(py + 1):
+                        for b in range(py):
                             iy = int(iy_vec[b].item())
                             S[ix, iy] += U_patch[a, b]
                             W[ix, iy] += 1.0

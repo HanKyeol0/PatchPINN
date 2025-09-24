@@ -35,18 +35,18 @@ class MHSA(nn.Module):
         self.use_rpb = use_relpos_bias
         self.rpb = RelPosBias(relpos_hidden, act=act) if use_relpos_bias else None
 
-    def forward(self, x: torch.Tensor, rel: Optional[torch.Tensor]) -> torch.Tensor:
-        # x: [P,D], rel: [P,P,2]
-        P, D = x.shape
-        q, k, v = self.qkv(x).chunk(3, dim=-1)           # [P,D] ×3
-        q = q.view(P, self.h, self.dh).transpose(0,1)    # [h,P,dh]
-        k = k.view(P, self.h, self.dh).transpose(0,1)
-        v = v.view(P, self.h, self.dh).transpose(0,1)
-        logits = torch.einsum('hpd,hqd->hpq', q, k) * self.scale  # [h,P,P]
+    def forward(self, x, rel): # x:[B,P,D], rel:[B,P,P,2]
+        B, P, D = x.shape
+        q, k, v = self.qkv(x).chunk(3, dim=-1)           # [B,P,D] ×3
+        q = q.view(B, P, self.h, self.dh).transpose(1,2)    # [B,h,P,dh]
+        k = k.view(B, P, self.h, self.dh).transpose(1,2)
+        v = v.view(B, P, self.h, self.dh).transpose(1,2)
+        logits = torch.einsum('bhpd,bhqd->bhpq', q, k) * self.scale  # [B,h,P,P]
         if self.use_rpb:
-            logits = logits + self.rpb(rel).unsqueeze(0)          # add shared bias
-        attn = self.attn_drop(torch.softmax(logits, dim=-1))
-        out = torch.einsum('hpq,hqd->hpd', attn, v).transpose(0,1).contiguous().view(P, D)
+            bias = self.rpb(rel).unsqueeze(1) # [B,1,P,P]
+            logits = logits + bias
+        attn = torch.softmax(logits, dim=-1)
+        out = torch.einsum('bhpq,bhqd->bhpd', attn, v).transpose(1,2).contiguous().view(B,P,D)
         return self.proj(out)
 
 class TransformerBlock(nn.Module):
@@ -128,11 +128,18 @@ class PatchAttention(nn.Module):
         return rel
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
-        assert X.dim() == 2, f"Expected [P,in_features], got {tuple(X.shape)}"
-        # P = X.shape[0]
-        # assert P == self.P, f"Expected P={(self.P)} points, got P={P}."
-        rel = self._pairwise_rel(X)  # [P,P,2]
-        z = self.embed(X)
+        if X.dim() == 2:
+            X = X.unsqueeze(0) # [1,P,2]
+        B, P, Din = X.shape
+        assert P == self.P, f"Expected P={self.P}, got {P}"
+        rel = X[:, :, None, :] - X[:, None, :, :] # [B,P,P,2]
+        if self.normalize_patch_coords:
+            span = (X.max(dim=1).values - X.min(dim=1).values).clamp_min(1e-6) # [B,2]
+            rel = rel / span[:, None, None, :] # [B,P,P,2]
+
+        z = self.embed(X) # [B,P,d_model]
         for blk in self.blocks:
-            z = blk(z, rel)
-        return self.head(self.norm_out(z))  # [P,out_features]
+            z = blk(z, rel) # modify blocks to accept [B,P,*]
+
+        z = self.head(self.norm_out(z)) # [B,P,1]
+        return z if z.shape[0] > 1 else z[0]
