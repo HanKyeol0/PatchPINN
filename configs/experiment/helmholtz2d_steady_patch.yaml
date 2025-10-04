@@ -2,12 +2,12 @@ domain:
   x: [-1.0, 1.0]
   y: [-1.0, 1.0]
 patch:
-  x: 3
-  y: 3
+  x: 5       # Must match model config
+  y: 5       # Must match model config (64 points per patch)
 grid:
-  x: 30
-  y: 30
+  x: 60     # Total grid points in x
+  y: 60     # Total grid points in y
 a1: 1.0
 a2: 2.0
 lambda: 1.0
-batch_size: 32
+batch_size: 16  # Reduced for larger patches

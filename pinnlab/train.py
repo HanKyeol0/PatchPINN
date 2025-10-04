@@ -184,8 +184,8 @@ def main(args):
         }
 
         log_payload = {"loss/total": float(total_loss.detach().cpu())}
-        log_payload.update(w_dict)
-        log_payload.update(aux)        # e.g., sigma values for uncertainty scheme
+        # log_payload.update(w_dict)
+        # log_payload.update(aux)        # e.g., sigma values for uncertainty scheme
         for k, v in losses.items():
             log_payload[f"loss/{k}"] = float(v.detach().cpu())
 
@@ -231,6 +231,7 @@ def main(args):
 
     # Final evaluation & plots
     model.eval()
+    global_step -= 1
     figs = exp.plot_final(model, base_cfg["eval"]["grid"], out_dir)
     for name, path in figs.items():
         wandb_log({f"fig/{name}": wandb.Image(path)}, step=global_step)

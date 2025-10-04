@@ -1,22 +1,21 @@
-# configs/model/patch_attention.yaml
 name: patch_attention
 in_features: 2
 out_features: 1
 
 patch:
-  x: 3         # cells in x (points per patch in x = 21)
-  y: 3          # cells in y (points per patch in y = 17)
+  x: 5         # 8 points in x per patch
+  y: 5         # 8 points in y per patch (total 64 points)
 
-activation: relu # or relu, tanh, sine (supported via get_act)
-hidden_dim: 32
-num_layers: 3
+activation: gelu   # Better for transformers
+hidden_dim: 64    # Larger model
+num_layers: 4
 num_heads: 4
 ff_mult: 4
 
-# optional but useful
-attn_dropout: 0.0
-resid_dropout: 0.0
+# Regularization
+attn_dropout: 0.1
+resid_dropout: 0.1
 prenorm: true
 use_relpos_bias: true
-relpos_hidden: 32
+relpos_hidden: 64
 normalize_patch_coords: true

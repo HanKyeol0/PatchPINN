@@ -1,71 +1,58 @@
-seed: 40
-device: "cuda"            # "cuda" or "cpu"
+seed: 42
+device: "cuda"
 train:
-  epochs: 1000
+  epochs: 3000
   batch:
-    n_f: 4096             # collocation points
-    n_b: 1024             # boundary points
-    n_0: 1024             # initial points (if applicable)
+    n_f: 4096
+    n_b: 1024
+    n_0: 1024
   optimizer:
     name: adam
-    lr: 1.0e-3
+    lr: 5.0e-4  # Lower for stability with transformers
+    weight_decay: 1.0e-5
   early_stopping:
     enabled: true
-    patience: 20000
-    min_delta: 1.0e-5
+    patience: 50000
+    min_delta: 1.0e-6
   loss_weights:
-    res: 1.0    # PDE residual
-    bc: 10.0   # boundary
-    ic: 10.0  # initial
+    res: 0.5
+    bc: 0.0  # Increased weight for boundary conditions
+    ic: 10.0
   loss_balancer:
-    use_loss_balancer: true
-    kind: softadapt        # one of: none | uncertainty | dwa | softadapt | gradnorm
-    terms: [res, bc, ic]
-    # DWA:
-    T: 2.0
-    # SoftAdapt:
-    beta: 10.0
-    ewma_alpha: 0.7
-    # Uncertainty:
-    init_log_sigma: 0.0
-    # GradNorm-Lite:
-    alpha: 0.12
+    use_loss_balancer: false
+    kind: dwa
+    terms: [res, bc]  # No IC for steady state
+    alpha: 0.15
     gamma: 0.5
-    update_every: 10
-    # If you want a specific layer for GradNorm-Lite (string match in param name):
-    # ref_layer_name: "layers.-1.weight"
+    update_every: 20
+    ref_layer_name: "head.weight"
 log:
   out_dir: "outputs"
   wandb:
     enabled: true
-    project: "pinnlab"
-    entity: null      # or your team
-    mode: "online"      # "auto" | "offline" | "disabled"
+    project: "pinnlab_patch"
+    entity: null
+    mode: "online"
 eval:
   grid:
-    nx: 200
-    ny: 200
+    nx: 201
+    ny: 201
     nt: 100
-  every: 100
+  every: 1000
 gradflow:
-  enabled: true
-  every: 200
-  store_vectors: true    # must be true if you want KDE
+  enabled: false
+  every: 500
+  store_vectors: true
   wandb_hist: false
-  max_keep: 20  # how many vectors to keep
+  max_keep: 20
   stop_at: 10000
   plot:
-    enabled: true          # <-- toggle all plotting
-    kde: true              # KDE of latest vectors per layer (paper-style) (KDE: kernel density estimation)
-    stats: true            # time-series curves of mean/max/L2 per layer
-    losses: ["bc", "res"]  # which losses to compare
+    enabled: true
+    kde: true
+    stats: true
+    losses: ["bc", "res"]
     loss_kde: true
     loss_kde_filename: "gradflow_kde_losses.png"
     kde_filename: "gradflow_kde.png"
     stats_prefix: "gradflow_stats"
-    max_cols: 4            # subplots per row
-    tagging:
-      # Regex applied to full module names
-      # (keep them permissive; they only help classification)
-      main_regex: "(?:^|\\.)(?:main|central|body)(?:\\.|$)"
-      skip_regex: "(?:^|\\.)(?:skip|shortcut|proj|downsample)(?:\\.|$)"
+    max_cols: 4
