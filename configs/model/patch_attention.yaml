@@ -12,9 +12,12 @@ num_layers: 4
 num_heads: 4
 ff_mult: 4
 
+pos_encoding: sinusoidal  # Options: "fourier", "sinusoidal", "learned", "none"
+fourier_scale: 5.0
+
 # Regularization
-attn_dropout: 0.1
-resid_dropout: 0.1
+attn_dropout: 0.05
+resid_dropout: 0.05
 prenorm: true
 use_relpos_bias: true
 relpos_hidden: 64

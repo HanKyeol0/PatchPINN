@@ -1,0 +1,17 @@
+name: patch_ffn_context
+in_features: 2
+out_features: 1
+
+patch:
+  x: 5
+  y: 5
+
+# Network architecture
+hidden_dim: 128
+num_layers: 6
+activation: tanh
+context_dim: 64  # Dimension for patch-level context
+
+# Fourier features
+use_fourier_features: true
+fourier_scale: 1.0

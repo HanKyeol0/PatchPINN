@@ -1,7 +1,7 @@
 seed: 42
-device: "cuda"
+device: "cuda:1"
 train:
-  epochs: 3000
+  epochs: 500
   batch:
     n_f: 4096
     n_b: 1024
@@ -15,8 +15,8 @@ train:
     patience: 50000
     min_delta: 1.0e-6
   loss_weights:
-    res: 0.5
-    bc: 0.0  # Increased weight for boundary conditions
+    res: 0.001 # 0.5
+    bc: 10000.0 # 0.0  # Increased weight for boundary conditions
     ic: 10.0
   loss_balancer:
     use_loss_balancer: false

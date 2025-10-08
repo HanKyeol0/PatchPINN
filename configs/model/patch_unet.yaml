@@ -1,0 +1,12 @@
+name: patch_unet
+in_features: 2
+out_features: 1
+
+patch:
+  x: 5  # Square patches for U-Net
+  y: 5
+
+# U-Net architecture
+base_channels: 32
+activation: gelu
+coord_channels: 5

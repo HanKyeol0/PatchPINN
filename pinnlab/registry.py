@@ -3,6 +3,11 @@ from pinnlab.models.mlp import MLP
 from pinnlab.models.fourier_mlp import FourierMLP
 from pinnlab.models.residual_network import ResidualNetwork
 from pinnlab.models.patch_attention import PatchAttention
+from pinnlab.models.patch_ffn import PatchFFN
+from pinnlab.models.patch_ffn_context import PatchFFNContext
+from pinnlab.models.patch_cnn import PatchCNN
+from pinnlab.models.patch_unet import UNetPatchCNN
+from pinnlab.models.patch_ffn_hard_bc import PatchFFNHardBC
 
 # experiments
 from pinnlab.experiments.burgers1d import Burgers1D
@@ -21,7 +26,12 @@ _MODEL_REG = {
     "mlp": MLP,
     "fourier_mlp": FourierMLP,
     "residual_network": ResidualNetwork,
-    "patch_attention": PatchAttention
+    "patch_attention": PatchAttention,
+    "patch_ffn": PatchFFN,
+    "patch_ffn_context": PatchFFNContext,
+    "patch_cnn": PatchCNN,
+    "patch_unet": UNetPatchCNN,
+    "patch_ffn_hard_bc": PatchFFNHardBC
 }
 
 _EXP_REG = {

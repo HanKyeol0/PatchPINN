@@ -1,0 +1,13 @@
+name: patch_cnn
+in_features: 2
+out_features: 1
+
+patch:
+  x: 5  # Must be square for CNN, 8x8 = 64 points
+  y: 5
+
+# CNN architecture
+base_channels: 32
+num_blocks: 3  # Number of conv blocks
+activation: gelu
+coord_channels: 5  # Channels for coordinate encoding

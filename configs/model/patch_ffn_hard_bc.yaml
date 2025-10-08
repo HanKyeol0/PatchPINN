@@ -1,0 +1,20 @@
+name: patch_ffn
+in_features: 2
+out_features: 1
+
+patch:
+  x: 5  # 5x5 = 25 points per patch
+  y: 5
+
+# FFN architecture
+hidden_dim: 128
+num_layers: 6  # Total layers (including input and output)
+activation: tanh  # tanh often works better for PINNs
+
+# Fourier features for better position encoding
+use_fourier_features: true
+fourier_scale: 1.0
+
+# Optional enhancements
+use_residual: false  # Add residual connections
+use_layer_norm: false  # Add layer normalization

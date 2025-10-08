@@ -6,6 +6,71 @@ import torch.nn.functional as F
 
 from .activation import get_act
 
+class SinusoidalPosEmbed(nn.Module):
+    """Sinusoidal positional embedding for 2D coordinates."""
+    def __init__(self, dim):
+        super().__init__()
+        self.dim = dim
+        assert dim % 4 == 0, "Dimension must be divisible by 4 for 2D sinusoidal encoding"
+        
+    def forward(self, x):
+        """
+        Args:
+            x: [B, N, 2] or [N, 2] tensor of 2D coordinates
+        Returns:
+            [B, N, dim] or [N, dim] tensor of sinusoidal features
+        """
+        device = x.device
+        half_dim = self.dim // 4
+        emb_x = math.log(10000) / (half_dim - 1)
+        emb_x = torch.exp(torch.arange(half_dim, device=device) * -emb_x)
+        emb_y = emb_x.clone()
+        
+        if x.dim() == 2:
+            pos_x = x[:, 0:1] * emb_x  # [N, half_dim]
+            pos_y = x[:, 1:2] * emb_y  # [N, half_dim]
+        else:
+            pos_x = x[:, :, 0:1] * emb_x  # [B, N, half_dim]
+            pos_y = x[:, :, 1:2] * emb_y  # [B, N, half_dim]
+        
+        # Create sinusoidal features
+        emb = torch.cat([
+            torch.sin(pos_x), torch.cos(pos_x),
+            torch.sin(pos_y), torch.cos(pos_y)
+        ], dim=-1)
+        
+        return emb
+    
+class FourierFeatures(nn.Module):
+    """Random Fourier features for positional encoding."""
+    def __init__(self, in_features=2, out_features=256, scale=10.0):
+        super().__init__()
+        # Random matrix B for Fourier features (frozen)
+        self.register_buffer('B', torch.randn(in_features, out_features // 2) * scale)
+        
+    def forward(self, x):
+        """
+        Args:
+            x: [..., in_features] tensor
+        Returns:
+            [..., out_features] tensor of Fourier features
+        """
+        x_proj = x @ self.B  # [..., out_features // 2]
+        return torch.cat([
+            torch.sin(2 * math.pi * x_proj), 
+            torch.cos(2 * math.pi * x_proj)
+        ], dim=-1)
+    
+class LearnedPosEmbed(nn.Module):
+    """Learnable positional embedding for patch points."""
+    def __init__(self, max_patches=100, dim=128):
+        super().__init__()
+        self.embed = nn.Parameter(torch.randn(max_patches, dim) * 0.02)
+        
+    def forward(self, n_points):
+        """Return first n_points positional embeddings."""
+        return self.embed[:n_points]
+
 class RelPosBias(nn.Module):
     """MLP mapping (dx,dy) -> scalar bias for attention logits."""
     def __init__(self, hidden:int=32, act:str="relu", dropout:float=0.0):
@@ -116,7 +181,28 @@ class PatchAttention(nn.Module):
         self.normalize_patch_coords = bool(cfg.get("normalize_patch_coords", True))
 
         # Model layers
-        self.embed = nn.Linear(in_f, d_model)
+        pos_encoding = cfg.get("pos_encoding", "fourier")  # Options: "fourier", "sinusoidal", "learned", "none"
+        print(f"Using positional encoding: {pos_encoding}")
+        
+        if pos_encoding == "fourier":
+            # Random Fourier features
+            fourier_scale = cfg.get("fourier_scale", 5.0)
+            self.pos_encoder = FourierFeatures(in_features=2, out_features=d_model, scale=fourier_scale)
+            self.embed = nn.Linear(d_model, d_model)
+        elif pos_encoding == "sinusoidal":
+            # Sinusoidal positional encoding
+            self.pos_encoder = SinusoidalPosEmbed(dim=d_model)
+            self.embed = nn.Linear(d_model, d_model)
+        elif pos_encoding == "learned":
+            # Learned positional embeddings
+            self.pos_encoder = LearnedPosEmbed(max_patches=self.P, dim=d_model)
+            self.embed = nn.Linear(in_f, d_model)
+            self.use_learned = True
+        else:
+            # No special positional encoding (original)
+            self.pos_encoder = None
+            self.embed = nn.Linear(in_f, d_model)
+
         mlp_hidden = ff_mult * d_model
         self.blocks = nn.ModuleList([
             TransformerBlock(d_model, heads, mlp_hidden, act, attn_dropout, resid_dropout,
@@ -124,7 +210,12 @@ class PatchAttention(nn.Module):
             for _ in range(layers)
         ])
         self.norm_out = nn.LayerNorm(d_model)
-        self.head = nn.Linear(d_model, out_f)
+
+        self.head = nn.Sequential(
+            nn.Linear(d_model, d_model // 2),
+            get_act(act),
+            nn.Linear(d_model // 2, out_f)
+        )
 
         self.apply(self._init)
 
@@ -149,18 +240,37 @@ class PatchAttention(nn.Module):
         B, P, Din = X.shape
         assert P == self.P, f"Expected P={self.P}, got {P}"
         
-        # Compute relative positions for attention
-        rel = X[:, :, None, :2] - X[:, None, :, :2]  # [B,P,P,2] using only spatial coords
-        if self.normalize_patch_coords:
-            # Normalize by the span of coordinates in each patch
-            xy_coords = X[:, :, :2]  # Just spatial dimensions
-            span = (xy_coords.max(dim=1).values - xy_coords.min(dim=1).values).clamp_min(1e-6)  # [B,2]
-            rel = rel / span[:, None, None, :]  # [B,P,P,2]
-
-        # Forward through transformer
-        z = self.embed(X)  # [B,P,d_model]
+        # ============================================
+        # Apply positional encoding
+        # ============================================
+        if self.pos_encoder is not None:
+            if isinstance(self.pos_encoder, LearnedPosEmbed):
+                # Learned embeddings: add to coordinate embeddings
+                z = self.embed(X)  # [B, P, d_model]
+                pos_emb = self.pos_encoder(P).unsqueeze(0)  # [1, P, d_model]
+                z = z + pos_emb
+            else:
+                # Fourier or Sinusoidal: encode coordinates directly
+                X_spatial = X[:, :, :2]  # Just (x,y) coordinates
+                z = self.pos_encoder(X_spatial)  # [B, P, d_model]
+                z = self.embed(z)  # Project to model dimension
+        else:
+            # No positional encoding (original)
+            z = self.embed(X)
+        
+        # Compute relative positions for attention bias (if used)
+        if self.blocks[0].attn.use_rpb:
+            rel = X[:, :, None, :2] - X[:, None, :, :2]  # [B, P, P, 2]
+            if self.normalize_patch_coords:
+                span = (X[:, :, :2].max(dim=1).values - X[:, :, :2].min(dim=1).values).clamp_min(1e-6)
+                rel = rel / span[:, None, None, :]
+        else:
+            rel = None
+        
+        # Forward through transformer blocks
         for blk in self.blocks:
             z = blk(z, rel)
-
-        z = self.head(self.norm_out(z))  # [B,P,out_features]
+        
+        # Output
+        z = self.head(self.norm_out(z))  # [B, P, out_features]
         return z if z.shape[0] > 1 else z[0]
