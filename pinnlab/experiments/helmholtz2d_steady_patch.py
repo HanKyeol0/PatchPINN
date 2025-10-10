@@ -1,10 +1,7 @@
-"""
-helmholtz2d_steady_patch_fixed.py - Fixed version with proper gradient tracking
-"""
-
 import math
 import numpy as np
 import torch
+import torch.nn.functional as F
 from pinnlab.experiments.base_patch import BaseExperiment_Patch
 from pinnlab.data.geometries import linspace_2d
 from pinnlab.data.samplers import sample_patches_2d_steady
@@ -30,10 +27,42 @@ class Helmholtz2DSteady_patch(BaseExperiment_Patch):
         self.input_dim = 2  # (x,y)
 
         self.batch_size = cfg.get("batch_size", 32)
+        
+        # Optimization settings
+        self.derivative_method = cfg.get("derivative_method", "autograd")  # "autograd" or "finite_diff"
+        
+        # Precompute grid spacings for finite differences
+        if self.derivative_method == "finite_diff":
+            self.dx = (self.xb - self.xa) / (self.gx - 1)
+            self.dy = (self.yb - self.ya) / (self.gy - 1)
+            print(f"Using finite differences with dx={self.dx:.4f}, dy={self.dy:.4f}")
+            
+            # Precompute finite difference stencil masks for interior points
+            self._compute_fd_masks()
+        else:
+            print("Using automatic differentiation")
 
-    def _iterate_in_chunks(self, lst, chunk):
-        for i in range(0, len(lst), chunk):
-            yield i, lst[i:i+chunk]
+    def _compute_fd_masks(self):
+        """Precompute which points in a patch can use finite differences."""
+        # For a px x py patch, interior points are those not on patch edges
+        # Create a mask for valid FD points (need neighbors in all directions)
+        self.fd_valid_mask = torch.zeros(self.px, self.py, dtype=torch.bool, device=self.device)
+        if self.px > 2 and self.py > 2:
+            self.fd_valid_mask[1:-1, 1:-1] = True
+        self.fd_valid_mask_flat = self.fd_valid_mask.reshape(-1)
+        
+        # Precompute index offsets for finite difference stencil
+        # For 2D Laplacian, we need: center, left, right, up, down
+        idx = torch.arange(self.patch_size, device=self.device).reshape(self.px, self.py)
+        
+        # Store indices for finite difference computation
+        self.fd_indices = {
+            'center': idx[1:-1, 1:-1].reshape(-1) if self.px > 2 and self.py > 2 else torch.tensor([], device=self.device),
+            'left':   idx[:-2, 1:-1].reshape(-1) if self.px > 2 and self.py > 2 else torch.tensor([], device=self.device),
+            'right':  idx[2:, 1:-1].reshape(-1) if self.px > 2 and self.py > 2 else torch.tensor([], device=self.device),
+            'up':     idx[1:-1, :-2].reshape(-1) if self.px > 2 and self.py > 2 else torch.tensor([], device=self.device),
+            'down':   idx[1:-1, 2:].reshape(-1) if self.px > 2 and self.py > 2 else torch.tensor([], device=self.device),
+        }
 
     def u_star(self, x, y):
         """Exact solution for the Helmholtz equation."""
@@ -45,18 +74,18 @@ class Helmholtz2DSteady_patch(BaseExperiment_Patch):
         return coeff * self.u_star(x, y)
 
     def sample_patches(self):
-        # Use exact solution as boundary condition for testing
+        """Sample patches with boundary conditions."""
         def g_dirichlet(x, y):
             return self.u_star(x.squeeze(-1), y.squeeze(-1))
 
         out = sample_patches_2d_steady(
             self.xa, self.xb,
             self.ya, self.yb,
-            self.px, self.py,  # patch size in points
-            self.gx, self.gy,  # total grid points
+            self.px, self.py,
+            self.gx, self.gy,
             device=self.device,
-            stride_x=None,  # Will default to px (non-overlapping)
-            stride_y=None,  # Will default to py (non-overlapping)
+            stride_x=None,
+            stride_y=None,
             boundary_fn=g_dirichlet,
         )
         x_f, x_b, u_b = out["interior_patches"], out["boundary_patches"], out["true_boundary"]
@@ -66,14 +95,83 @@ class Helmholtz2DSteady_patch(BaseExperiment_Patch):
         x_f, x_b, u_b = self.sample_patches()
         return {"X_f": x_f, "X_b": x_b, "u_b": u_b}
     
-    def pde_residual_loss(self, model, batch):
-        """
-        FIXED: Compute PDE residual loss with proper gradient tracking.
-        """
+    def pde_residual_loss_finite_diff(self, model, batch):
+        """PDE residual using finite differences for Laplacian."""
+        device = self.device
+        coords_list = []
+        
+        # Collect interior patches
+        for coords in batch.get("X_f", []):
+            coords_list.append(coords)
+        
+        # Add interior points from boundary patches
+        for patch in batch.get("X_b", []):
+            coords = patch["coords"]
+            bmask = patch["boundary_mask"]
+            # For FD, we need the whole patch structure
+            # Mark this patch as having boundary points
+            coords_list.append(coords)
+        
+        if len(coords_list) == 0:
+            return torch.tensor(0.0, device=device, requires_grad=True)
+        
+        all_losses = []
+        bs = self.batch_size
+        
+        for start in range(0, len(coords_list), bs):
+            chunk = coords_list[start:start+bs]
+            if not chunk:
+                continue
+                
+            # Stack patches
+            C = torch.stack(chunk, dim=0).to(device)  # [B, P, 2]
+            B = C.size(0)
+            
+            # Forward through model
+            U = model(C)  # [B, P, 1] or [B, P]
+            if U.dim() == 2:
+                U = U.unsqueeze(-1)  # [B, P, 1]
+            
+            # Reshape to grid for finite differences
+            U_grid = U.reshape(B, self.px, self.py)  # [B, px, py]
+            
+            # Compute Laplacian using finite differences (5-point stencil)
+            # Only for interior points of each patch
+            if len(self.fd_indices['center']) > 0:
+                u_center = U_grid[:, 1:-1, 1:-1]  # [B, px-2, py-2]
+                u_left   = U_grid[:, :-2, 1:-1]
+                u_right  = U_grid[:, 2:, 1:-1]
+                u_up     = U_grid[:, 1:-1, :-2]
+                u_down   = U_grid[:, 1:-1, 2:]
+                
+                # Laplacian
+                laplacian = (u_left - 2*u_center + u_right) / (self.dx**2) + \
+                           (u_up - 2*u_center + u_down) / (self.dy**2)
+                
+                # Get coordinates for interior points
+                X_interior = C[:, self.fd_indices['center'], :]  # [B, n_interior, 2]
+                
+                # Source term at interior points
+                f_vals = self.f(X_interior[..., 0], X_interior[..., 1])  # [B, n_interior]
+                
+                # PDE residual: ∇²u + λu - f = 0
+                u_center_flat = u_center.reshape(B, -1)  # [B, n_interior]
+                residual = laplacian.reshape(B, -1) + self.lam * u_center_flat - f_vals
+                
+                # Loss
+                loss = (residual ** 2).mean()
+                all_losses.append(loss)
+        
+        if all_losses:
+            return torch.stack(all_losses).mean()
+        else:
+            return torch.tensor(0.0, device=device, requires_grad=True)
+    
+    def pde_residual_loss_autograd(self, model, batch):
+        """Original autograd-based PDE residual (vectorized version)."""
         device = self.device
         P = self.patch_size
         
-        # Gather all patches (interior + boundary interior points)
         coords_list = []
         keep_mask_list = []
         
@@ -87,134 +185,42 @@ class Helmholtz2DSteady_patch(BaseExperiment_Patch):
             coords = patch["coords"]
             bmask = patch["boundary_mask"]
             coords_list.append(coords)
-            keep_mask_list.append(~bmask)  # Keep only interior points
+            keep_mask_list.append(~bmask)
         
         if len(coords_list) == 0:
             return torch.tensor(0.0, device=device, requires_grad=True)
         
-        errs = []
-        bs = self.batch_size
-        
-        for start, coords_chunk in self._iterate_in_chunks(coords_list, bs):
-            k_masks_chunk = keep_mask_list[start:start+len(coords_chunk)]
-            
-            # Stack coordinates
-            C = torch.stack(coords_chunk, dim=0).to(device)  # [B,P,2]
-            K = torch.stack(k_masks_chunk, dim=0).to(device)  # [B,P]
-            B = C.size(0)
-            
-            # CRITICAL FIX: Make sure coordinates require gradients
-            X = C.clone().detach().requires_grad_(True)  # [B,P,2]
-            
-            # Forward through model
-            U = model(X)  # [B,P,1] or [B,P]
-            if U.dim() == 2:
-                U = U.unsqueeze(-1)  # Ensure [B,P,1]
-            
-            # Compute gradients using individual outputs
-            # This ensures proper gradient computation
-            u_x_list = []
-            u_y_list = []
-            u_xx_list = []
-            u_yy_list = []
-            
-            for b in range(B):
-                for p in range(P):
-                    if not K[b, p]:  # Skip masked points
-                        continue
-                    
-                    u_point = U[b, p, 0]
-                    
-                    # First derivatives
-                    grad_u = torch.autograd.grad(
-                        outputs=u_point,
-                        inputs=X,
-                        grad_outputs=torch.ones_like(u_point),
-                        create_graph=True,
-                        retain_graph=True
-                    )[0]  # [B,P,2]
-                    
-                    u_x = grad_u[b, p, 0]
-                    u_y = grad_u[b, p, 1]
-                    
-                    # Second derivatives
-                    grad_ux = torch.autograd.grad(
-                        outputs=u_x,
-                        inputs=X,
-                        grad_outputs=torch.ones_like(u_x),
-                        create_graph=True,
-                        retain_graph=True
-                    )[0]
-                    
-                    grad_uy = torch.autograd.grad(
-                        outputs=u_y,
-                        inputs=X,
-                        grad_outputs=torch.ones_like(u_y),
-                        create_graph=True,
-                        retain_graph=True
-                    )[0]
-                    
-                    u_xx = grad_ux[b, p, 0]
-                    u_yy = grad_uy[b, p, 1]
-                    
-                    # PDE residual: ∇²u + λu - f = 0
-                    x_coord = X[b, p, 0]
-                    y_coord = X[b, p, 1]
-                    f_val = self.f(x_coord, y_coord)
-                    
-                    residual = u_xx + u_yy + self.lam * u_point - f_val
-                    errs.append(residual ** 2)
-        
-        if len(errs) == 0:
-            return torch.tensor(0.0, device=device, requires_grad=True)
-        
-        # Return mean of squared residuals
-        return torch.stack(errs).mean()
-    
-    def pde_residual_loss_vectorized(self, model, batch):
-        """
-        Alternative vectorized version - faster but may have gradient issues.
-        """
-        device = self.device
-        P = self.patch_size
-        
-        # Gather patches
-        coords_list = []
-        for coords in batch.get("X_f", []):
-            coords_list.append(coords)
-        
-        if len(coords_list) == 0:
-            return torch.tensor(0.0, device=device, requires_grad=True)
-        
-        # Process all at once
+        # Process all at once (vectorized)
         all_coords = torch.stack(coords_list, dim=0).to(device)  # [N,P,2]
+        all_masks = torch.stack(keep_mask_list, dim=0).to(device)  # [N,P]
+        
         N = all_coords.shape[0]
         
-        # Flatten for easier gradient computation
+        # Flatten for gradient computation
         X_flat = all_coords.reshape(-1, 2)  # [N*P, 2]
+        mask_flat = all_masks.reshape(-1)  # [N*P]
         X_flat = X_flat.clone().detach().requires_grad_(True)
         
         # Reshape back for model
         X = X_flat.reshape(N, P, 2)
         
         # Forward
-        U = model(X)  # [N,P,1] or [N,P]
+        U = model(X)
         if U.dim() == 2:
             U = U.unsqueeze(-1)
         U_flat = U.reshape(-1, 1)  # [N*P, 1]
         
-        # Compute gradients with sum trick
-        grad_outputs = torch.ones_like(U_flat)
+        # First derivatives
         grad_u = torch.autograd.grad(
             outputs=U_flat,
             inputs=X_flat,
-            grad_outputs=grad_outputs,
+            grad_outputs=torch.ones_like(U_flat),
             create_graph=True,
             retain_graph=True
-        )[0]  # [N*P, 2]
+        )[0]
         
-        u_x = grad_u[:, 0:1]  # [N*P, 1]
-        u_y = grad_u[:, 1:2]  # [N*P, 1]
+        u_x = grad_u[:, 0:1]
+        u_y = grad_u[:, 1:2]
         
         # Second derivatives
         grad_ux = torch.autograd.grad(
@@ -233,19 +239,26 @@ class Helmholtz2DSteady_patch(BaseExperiment_Patch):
             retain_graph=True
         )[0]
         
-        u_xx = grad_ux[:, 0:1]  # [N*P, 1]
-        u_yy = grad_uy[:, 1:2]  # [N*P, 1]
+        u_xx = grad_ux[:, 0:1]
+        u_yy = grad_uy[:, 1:2]
         
         # PDE residual
-        f_vals = self.f(X_flat[:, 0], X_flat[:, 1]).unsqueeze(-1)  # [N*P, 1]
+        f_vals = self.f(X_flat[:, 0], X_flat[:, 1]).unsqueeze(-1)
         residual = u_xx + u_yy + self.lam * U_flat - f_vals
         
-        return (residual ** 2).mean()
+        # Apply mask and compute loss
+        residual_masked = residual[mask_flat]
+        return (residual_masked ** 2).mean()
+    
+    def pde_residual_loss(self, model, batch):
+        """Dispatch to appropriate PDE residual computation."""
+        if self.derivative_method == "finite_diff":
+            return self.pde_residual_loss_finite_diff(model, batch)
+        else:
+            return self.pde_residual_loss_autograd(model, batch)
 
     def boundary_loss(self, model, batch):
-        """
-        FIXED: Compute boundary loss ensuring gradients flow.
-        """
+        """Boundary loss computation (unchanged)."""
         device = self.device
         
         coords_list = []
@@ -266,41 +279,24 @@ class Helmholtz2DSteady_patch(BaseExperiment_Patch):
         if len(coords_list) == 0:
             return torch.tensor(0.0, device=device, requires_grad=True)
         
-        errs = []
+        # Vectorized processing
+        all_coords = torch.stack(coords_list, dim=0).to(device)  # [N, P, 2]
+        all_bmask = torch.stack(bmask_list, dim=0).to(device)  # [N, P]
         
-        for coords, bmask, ub in zip(coords_list, bmask_list, ub_list):
-            coords = coords.to(device)
-            bmask = bmask.to(device)
-            
-            # Forward through model - keep gradients
-            pred = model(coords)  # [P,1] or [P]
-            if pred.dim() > 1:
-                pred = pred.squeeze(-1)  # [P]
-            
-            # Get boundary points
-            pred_b = pred[bmask]  # [Nb]
-            
-            if ub is not None:
-                ub = ub.to(device)
-                if ub.dim() > 1:
-                    ub = ub.squeeze(-1)
-                # Get boundary values, filtering NaNs
-                ub_b = ub[bmask]
-                valid = ~torch.isnan(ub_b)
-                if valid.any():
-                    errs.append((pred_b[valid] - ub_b[valid]) ** 2)
-            else:
-                # Use exact solution
-                coords_b = coords[bmask]
-                ub_b = self.u_star(coords_b[:, 0], coords_b[:, 1])
-                errs.append((pred_b - ub_b) ** 2)
+        # Forward
+        pred = model(all_coords)  # [N, P, 1] or [N, P]
+        if pred.dim() > 2:
+            pred = pred.squeeze(-1)  # [N, P]
         
-        if len(errs) == 0:
-            return torch.tensor(0.0, device=device, requires_grad=True)
+        # Extract boundary values
+        pred_b = pred[all_bmask]  # [total_boundary_points]
         
-        # Concatenate and return mean
-        all_errs = torch.cat([e.reshape(-1) for e in errs])
-        return all_errs.mean()
+        # Compute target values
+        coords_b = all_coords[all_bmask]  # [total_boundary_points, 2]
+        ub_exact = self.u_star(coords_b[:, 0], coords_b[:, 1])
+        
+        loss = (pred_b - ub_exact) ** 2
+        return loss.mean()
 
     def initial_loss(self, model, batch):
         """No initial condition for steady-state problems."""
@@ -320,19 +316,15 @@ class Helmholtz2DSteady_patch(BaseExperiment_Patch):
             
             for i in range(0, nx - px + 1, px):
                 for j in range(0, ny - py + 1, py):
-                    # Extract patch
                     x_patch = Xg[i:i+px, j:j+py].reshape(-1)
                     y_patch = Yg[i:i+px, j:j+py].reshape(-1)
                     coords = torch.stack([x_patch, y_patch], dim=1)
                     
-                    # Predict
                     u_patch = model(coords).squeeze(-1).reshape(px, py)
                     U_pred[i:i+px, j:j+py] = u_patch
             
-            # True solution
             U_true = self.u_star(Xg, Yg)
             
-            # Relative L2 error
             num = torch.linalg.norm((U_pred - U_true).reshape(-1))
             den = torch.linalg.norm(U_true.reshape(-1))
             return (num / den).item()
@@ -343,7 +335,6 @@ class Helmholtz2DSteady_patch(BaseExperiment_Patch):
         Xg, Yg = linspace_2d(self.xa, self.xb, self.ya, self.yb, nx, ny, self.device)
         
         with torch.no_grad():
-            # Similar to relative_l2_on_grid
             U_pred = torch.zeros(nx, ny, device=self.device)
             px, py = self.px, self.py
             

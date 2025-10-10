@@ -1,0 +1,7 @@
+name: simple_patch_cnn
+in_features: 2
+out_features: 1
+
+patch:
+  x: 4  # Must be square
+  y: 4

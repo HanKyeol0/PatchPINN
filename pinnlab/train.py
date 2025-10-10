@@ -30,6 +30,9 @@ def main(args):
     out_features = exp_cfg.get("out_features", model_cfg.get("out_features"))
     model_cfg["in_features"]  = in_features
     model_cfg["out_features"] = out_features
+    model_cfg["patch"]["x"] = exp_cfg.get("patch", {}).get("x", None)
+    model_cfg["patch"]["y"] = exp_cfg.get("patch", {}).get("y", None)
+    model_cfg["patch"]["t"] = exp_cfg.get("patch", {}).get("t", None)
 
     seed_everything(base_cfg["seed"])
 
@@ -133,6 +136,8 @@ def main(args):
     print("training started")
     global_step = 1
 
+    training_start_time = time.time()
+
     for ep in pbar:
         model.train()
 
@@ -213,6 +218,10 @@ def main(args):
         pbar.set_postfix({k: f"{v:.3e}" for k,v in all_metrics.items() if "loss" in k})
 
         global_step += 1
+
+    training_end_time = time.time()
+
+    wandb_log({"train/time_seconds": training_end_time - training_start_time})
 
     weights_png = os.path.join(out_dir, "loss_weights.png")
     plot_weights_over_time(weights_csv, weights_png)

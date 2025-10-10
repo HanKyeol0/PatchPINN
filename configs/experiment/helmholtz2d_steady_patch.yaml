@@ -1,16 +1,17 @@
 domain:
-  x: [-1.0, 1.0]
-  y: [-1.0, 1.0]
+  x: [-3.0, 3.0]
+  y: [-3.0, 3.0]
 patch:
-  x: 3       # Must match model config
-  y: 3       # Must match model config (64 points per patch)
+  x: 10       # Must match model config
+  y: 10       # Must match model config (64 points per patch)
 grid:
-  x: 30     # Total grid points in x
-  y: 30     # Total grid points in y
+  x: 150     # Total grid points in x
+  y: 150     # Total grid points in y
 stride:
-  x: 3
-  y: 3
+  x: 1
+  y: 1
 a1: 1.0
-a2: 2.0
+a2: 4.0
 lambda: 1.0
-batch_size: 16  # Reduced for larger patches
+batch_size: 32  # Reduced for larger patches
+derivative_method: finite_diff # autograd, finite_diff

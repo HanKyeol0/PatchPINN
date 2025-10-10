@@ -1,20 +1,43 @@
-name: patch_ffn
-in_features: 2
-out_features: 1
+# name: patch_ffn
+# in_features: 2
+# out_features: 1
 
-patch:
-  x: 3  # 5x5 = 25 points per patch
-  y: 3
+# # FFN architecture
+# hidden_dim: 128
+# num_layers: 6  # Total layers (including input and output)
+# activation: tanh  # tanh often works better for PINNs
+
+# patch:
+#   x: None  # Number of patches in x direction
+#   y: None  # Number of patches in y direction
+
+# # Fourier features for better position encoding
+# use_fourier_features: true
+# fourier_scale: 1.0
+
+# # Optional enhancements
+# use_residual: false  # Add residual connections
+# use_layer_norm: false  # Add layer normalization
+
+name: patch_ffn
+in_features: 3    # (x, y, t) for time-dependent problems
+out_features: 1
 
 # FFN architecture
 hidden_dim: 128
-num_layers: 6  # Total layers (including input and output)
+num_layers: 8     # Deeper network for time-dependent problems
 activation: tanh  # tanh often works better for PINNs
+
+# Patch dimensions must match experiment config
+patch:
+  x: None   # Must match experiment config
+  y: None   # Must match experiment config
+  t: None   # Must match experiment config, P = 3 * 3 * 3 = 27
 
 # Fourier features for better position encoding
 use_fourier_features: true
 fourier_scale: 1.0
 
 # Optional enhancements
-use_residual: false  # Add residual connections
+use_residual: false    # Add residual connections
 use_layer_norm: false  # Add layer normalization

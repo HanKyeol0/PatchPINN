@@ -3,11 +3,15 @@ in_features: 2
 out_features: 1
 
 patch:
-  x: 5  # Must be square for CNN, 8x8 = 64 points
-  y: 5
+  x: 4  # Smaller patch size (4x4 = 16 points)
+  y: 4
 
-# CNN architecture
-base_channels: 32
-num_blocks: 3  # Number of conv blocks
-activation: gelu
-coord_channels: 5  # Channels for coordinate encoding
+# CNN architecture - conservative settings
+base_channels: 16  # Reduced from 32
+num_blocks: 2      # Reduced from 3
+activation: tanh   # More stable than ReLU/GELU
+coord_channels: 4  # Reduced from 8
+
+# Disable features that can cause NaN
+use_batchnorm: false  # BatchNorm can be unstable with small batches
+dropout: 0.0         # No dropout initially
