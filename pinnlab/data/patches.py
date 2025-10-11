@@ -88,86 +88,93 @@ def attach_time(
     patches: Dict[str, torch.Tensor],
     t0: float, t1: float, nt: int,
     kt: int, st: int,
-    pad_mode_t: str,
-    sample_mode: str = "sliding",
-) -> Dict[str, torch.Tensor]:
+    pad_mode_t: str = "reflect",
+):
     """
-    Expand 2D spatial patches into 3D (x,y,t) patches.
+    Expand spatial patches over sliding time windows of length kt, stride st.
+    Supports pad_mode_t in {"reflect","replicate","circular","constant","zero","none"}.
 
-    Inputs (from extract_xy_patches):
-      patches["coords"]: [L, P, 2]
+    Input (from extract_xy_patches):
+      patches["coords"]: [L, P, 2]  (x,y)
       patches["valid"] : [L, P]
-      patches["is_bnd"]: [L, P]  (spatial boundary)
+      patches["is_bnd"]: [L, P]
+      patches["meta"]  : {...}
 
-    Outputs:
-      coords: [L*Nt, P*kt, 3]
-      valid : [L*Nt, P*kt]
-      is_bnd: [L*Nt, P*kt]  (spatial boundary only)
-      is_ic : [L*Nt, P*kt]  (t == t0)
+    Output:
+      dict with keys: coords:[L*Nt, P*kt, 3], valid:[L*Nt, P*kt], is_bnd:[L*Nt, P*kt],
+      is_ic:[L*Nt, P*kt], meta:{..., "kt","st","Nt","P3"}
     """
     coords = patches["coords"]     # [L,P,2]
     valid  = patches["valid"]      # [L,P]
-    is_bnd = patches["is_bnd"]     # [L,P]
+    bnd    = patches["is_bnd"]     # [L,P]
+    meta   = patches["meta"]
     device = coords.device
-
-    ts = torch.linspace(t0, t1, nt, device=device)   # [nt]
-
-    # Build 1D time signal as 4D so nn.Unfold can consume it
-    t4  = ts.view(1, 1, 1, -1)                       # [1,1,1,nt]
-    m4  = torch.ones_like(t4)                        # [1,1,1,nt]
-
-    # Padding along time
-    pL0 = (kt - 1) // 2
-    pL1 = kt - 1 - pL0
-    if pad_mode_t in ("reflect", "replicate", "circular"):
-        t4p = F.pad(t4, (pL0, pL1), mode=pad_mode_t)
-        m4p = F.pad(m4, (pL0, pL1), mode=pad_mode_t)
-        if pad_mode_t == "circular":
-            m4p[:] = 1.0
-    elif pad_mode_t == "zero":
-        t4p = F.pad(t4, (pL0, pL1), mode="constant", value=float("nan"))
-        m4p = F.pad(m4, (pL0, pL1), mode="constant", value=0.0)
-    elif pad_mode_t == "none":
-        t4p, m4p = t4, m4
-    else:
-        raise ValueError(pad_mode_t)
-
-    # Slide a window of length kt with stride st along time
-    unfold1d = torch.nn.Unfold(kernel_size=(1, kt), stride=(1, st))
-    tpatch = unfold1d(t4p).squeeze(0).T   # [Nt, kt]
-    mpatch = unfold1d(m4p).squeeze(0).T   # [Nt, kt]
-    Nt = tpatch.shape[0]
+    dtype  = coords.dtype
 
     L, P, _ = coords.shape
 
-    # ---- build broadcastable tensors with matching ranks ----
-    # (x,y) replicated across (Nt, kt)
-    # coords: [L,P,2] -> [L, Nt, P, kt, 2]
-    xy_big  = coords[:, None, :, None, :].repeat(1, Nt, 1, kt, 1)
+    # time vector (length nt) -> shape (1,1,nt) for non-constant pad
+    t = torch.linspace(t0, t1, nt, device=device, dtype=dtype)         # [nt]
+    t3 = t.view(1, 1, -1)                                              # [1,1,nt]
 
-    # valid & boundary masks: [L,P] -> [L, Nt, P, kt]
-    val_big = valid[:,  None, :, None].repeat(1, Nt, 1, kt)
-    bnd_big = is_bnd[:, None, :, None].repeat(1, Nt, 1, kt)
+    # "same"-style temporal padding (centered window)
+    pL = kt // 2
+    pR = (kt - 1) // 2
 
-    # time windows: [Nt,kt] -> [L, Nt, P, kt]
-    t_big   = tpatch[None, :, None, :].repeat(L, 1, P, 1)
-    tm_big  = mpatch[None, :, None, :].repeat(L, 1, P, 1)
+    # choose pad behavior
+    pad_mode_t = (pad_mode_t or "none").lower()
+    if pad_mode_t in {"reflect", "replicate", "circular"}:
+        t3p = F.pad(t3, (pL, pR), mode=pad_mode_t)                     # [1,1,nt+pL+pR]
+        padded_is_real = torch.ones(t3p.shape[-1], dtype=torch.bool, device=device)
+        # non-constant pad ⇒ all entries are "real" (no invalid time positions)
+    elif pad_mode_t in {"constant", "zero"}:
+        t3p = F.pad(t3, (pL, pR), mode="constant", value=0.0)
+        # track which positions came from real indices [0, nt-1]
+        idx_line = torch.arange(-pL, nt + pR, device=device)
+        padded_is_real = (idx_line >= 0) & (idx_line < nt)
+    else:  # "none"
+        t3p = t3  # no pad
+        pL = pR = 0
+        idx_line = torch.arange(0, nt, device=device)
+        padded_is_real = torch.ones_like(idx_line, dtype=torch.bool)
 
-    # ---- concatenate along the last coord dim and flatten patches ----
-    coords3 = torch.cat([xy_big[..., 0:1], xy_big[..., 1:2], t_big[..., None]], dim=-1)
-    coords3 = coords3.reshape(L * Nt, P * kt, 3)
+    # Use 2D unfold with H=1 to make 1D sliding windows
+    t4 = t3p.view(1, 1, 1, -1)                                         # [1,1,1,W]
+    tw = F.unfold(t4, kernel_size=(1, kt), stride=(1, st))             # [1, kt, Nt]
+    Nt = tw.shape[-1]
+    times = tw.squeeze(0).transpose(0, 1).contiguous()                 # [Nt, kt]
 
-    # bool masks
-    v_bool  = (val_big > 0.5) & (tm_big > 0.5)               # [L,Nt,P,kt] bool
-    b_bool  = (bnd_big > 0.5) & v_bool                        # boundary & valid
+    # Time-valid mask (only matters for constant/none)
+    if pad_mode_t in {"reflect", "replicate", "circular"}:
+        valid_t = torch.ones((Nt, kt), dtype=torch.bool, device=device)
+    else:
+        # build windows over the index line to know which positions are from real time
+        idx4 = (idx_line.view(1, 1, 1, -1)).to(dtype=coords.dtype)
+        iw = F.unfold(idx4, kernel_size=(1, kt), stride=(1, st)).to(torch.long)  # [1, kt, Nt]
+        iw = iw.squeeze(0).transpose(0, 1)                                       # [Nt, kt]
+        valid_t = ((iw >= 0) & (iw < nt))                                        # [Nt, kt]
 
-    valid3  = v_bool.reshape(L * Nt, P * kt).to(coords3.dtype)
-    bnd3    = b_bool.reshape(L * Nt, P * kt).to(coords3.dtype)
+    # Expand spatial patches across Nt windows and kt positions per window
+    coords_xy = coords.unsqueeze(1).unsqueeze(3).repeat(1, Nt, 1, kt, 1)         # [L,Nt,P,kt,2]
+    t_big     = times.view(1, Nt, 1, kt).repeat(L, 1, P, 1)                      # [L,Nt,P,kt]
+    coords3   = torch.cat([coords_xy, t_big.unsqueeze(-1)], dim=-1)              # [L,Nt,P,kt,3]
+    coords3   = coords3.view(L * Nt, P * kt, 3)
 
-    # IC mask (t == t0) within half step tolerance
-    tol = 0.5 * (t1 - t0) / max(1, nt - 1)
-    is_ic = ((t_big - t0).abs() <= tol) & v_bool              # bool
-    ic3   = is_ic.reshape(L * Nt, P * kt).to(coords3.dtype)
+    # Build masks
+    val_big = valid.unsqueeze(1).unsqueeze(3).repeat(1, Nt, 1, kt)               # [L,Nt,P,kt]
+    bnd_big = bnd.unsqueeze(1).unsqueeze(3).repeat(1, Nt, 1, kt)                 # [L,Nt,P,kt]
+    tm_big  = valid_t.view(1, Nt, 1, kt).repeat(L, 1, P, 1)                      # [L,Nt,P,kt]
 
-    meta = {**patches["meta"], "kt": kt, "st": st, "Nt": Nt, "P3": P * kt}
-    return {"coords": coords3, "valid": valid3, "is_bnd": bnd3, "is_ic": ic3, "meta": meta}
+    v_bool = (val_big > 0.5) & tm_big
+    b_bool = (bnd_big > 0.5) & v_bool
+
+    valid3 = v_bool.view(L * Nt, P * kt).to(dtype)
+    bnd3   = b_bool.view(L * Nt, P * kt).to(dtype)
+
+    # IC mask: near t0 within half-step tolerance
+    tol   = 0.5 * (t1 - t0) / max(1, nt - 1)
+    is_ic = (t_big - t0).abs() <= tol
+    ic3   = (is_ic & v_bool).view(L * Nt, P * kt).to(dtype)
+
+    meta_out = {**meta, "kt": kt, "st": st, "Nt": Nt, "P3": P * kt}
+    return {"coords": coords3, "valid": valid3, "is_bnd": bnd3, "is_ic": ic3, "meta": meta_out}

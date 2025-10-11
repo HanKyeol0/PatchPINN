@@ -1,8 +1,0 @@
-domain:
-  x: [0.0, 1.0]
-  t: [0.0, 1.0]
-
-c: 1.0                 # wave speed
-in_features: 2         # (x, t)
-out_features: 1
-time_dependent: true

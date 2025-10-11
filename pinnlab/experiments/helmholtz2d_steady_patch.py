@@ -2,7 +2,7 @@ import math
 import numpy as np
 import torch
 import torch.nn.functional as F
-from pinnlab.experiments.base_patch import BaseExperiment_Patch
+from pinnlab.experiments.base import BaseExperiment_Patch
 from pinnlab.data.geometries import linspace_2d
 from pinnlab.data.samplers import sample_patches_2d_steady
 from pinnlab.utils.plotting import save_plots_2d

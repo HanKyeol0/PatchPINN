@@ -126,6 +126,7 @@
 #             out = out.squeeze(0)  # [P, out_features]
         
 #         return out
+
 import torch
 import torch.nn as nn
 from typing import Dict, Any
@@ -258,10 +259,10 @@ class PatchFFN(nn.Module):
         B, P, D = X.shape
         
         # Check if patch size matches expected (with tolerance for evaluation)
-        if P != self.P:
-            # Only warn if significantly different (not just padding differences)
-            if abs(P - self.P) > self.P:
-                print(f"Warning: Expected {self.P} points, got {P} points")
+        # if P != self.P:
+        #     # Only warn if significantly different (not just padding differences)
+        #     if abs(P - self.P) > self.P:
+        #         print(f"Warning: Expected {self.P} points, got {P} points")
         
         # Flatten batch and points dimensions
         X_flat = X.reshape(B * P, D)  # [B*P, D]

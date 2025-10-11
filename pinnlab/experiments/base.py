@@ -6,28 +6,18 @@ def make_leaf(X: torch.Tensor) -> torch.Tensor:
     return X.clone().detach().requires_grad_(True)
 
 def grad_sum(y: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-    """
-    dy/dx using sum-of-outputs trick.
-    Returns zeros for inputs that were not used in the graph.
-    """
-    (g,) = torch.autograd.grad(
-        y, x,
-        grad_outputs=torch.ones_like(y),
-        create_graph=True,
-        retain_graph=True,
-        allow_unused=True,          # <-- tolerate unused inputs
-    )
-    if g is None:
-        g = torch.zeros_like(x)     # <-- fill with zeros when unused
-    return g
+    """dy/dx where y can be vector; uses sum-of-outputs trick."""
+    return torch.autograd.grad(
+        y, x, grad_outputs=torch.ones_like(y),
+        create_graph=True, retain_graph=True
+    )[0]
 
-
-class BaseExperiment(ABC):
+class BaseExperiment_Patch(ABC):
     def __init__(self, cfg, device):
         self.cfg = cfg; self.device = device
 
     @abstractmethod
-    def sample_batch(self, n_f:int, n_b:int, n_0:int): ...
+    def sample_patches(self, n_f:int, n_b:int, n_0:int): ...
 
     def pde_residual_loss(self, model, batch): return torch.tensor(0., device=self.device)
     def boundary_loss(self, model, batch):     return torch.tensor(0., device=self.device)

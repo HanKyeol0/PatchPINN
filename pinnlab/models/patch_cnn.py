@@ -1,3 +1,7 @@
+"""
+patch_cnn_fixed.py - Fixed CNN model that handles patches correctly
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

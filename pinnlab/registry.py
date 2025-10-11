@@ -1,7 +1,4 @@
 # models
-from pinnlab.models.mlp import MLP
-from pinnlab.models.fourier_mlp import FourierMLP
-from pinnlab.models.residual_network import ResidualNetwork
 from pinnlab.models.patch_attention import PatchAttention
 from pinnlab.models.patch_ffn import PatchFFN
 from pinnlab.models.patch_ffn_context import PatchFFNContext
@@ -10,23 +7,10 @@ from pinnlab.models.patch_unet import UNetPatchCNN
 from pinnlab.models.patch_ffn_hard_bc import PatchFFNHardBC
 
 # experiments
-from pinnlab.experiments.burgers1d import Burgers1D
-from pinnlab.experiments.helmholtz2d import Helmholtz2D
-from pinnlab.experiments.helmholtz2d_steady import Helmholtz2DSteady
-from pinnlab.experiments.poisson2d import Poisson2D
-from pinnlab.experiments.navierstokes2d import NavierStokes2D
-from pinnlab.experiments.convection1d import Convection1D
-from pinnlab.experiments.reactiondiffusion1d import ReactionDiffusion1D
-from pinnlab.experiments.reactiondiffusion2d import ReactionDiffusion2D
-from pinnlab.experiments.allencahn1d import AllenCahn1D
-from pinnlab.experiments.allencahn2d import AllenCahn2D
 from pinnlab.experiments.helmholtz2d_steady_patch import Helmholtz2DSteady_patch
 from pinnlab.experiments.helmholtz2d_patch import Helmholtz2D_patch
 
 _MODEL_REG = {
-    "mlp": MLP,
-    "fourier_mlp": FourierMLP,
-    "residual_network": ResidualNetwork,
     "patch_attention": PatchAttention,
     "patch_ffn": PatchFFN,
     "patch_ffn_context": PatchFFNContext,
@@ -37,16 +21,16 @@ _MODEL_REG = {
 }
 
 _EXP_REG = {
-    "burgers1d": Burgers1D,
-    "helmholtz2d": Helmholtz2D,
-    "helmholtz2d_steady": Helmholtz2DSteady,
-    "poisson2d": Poisson2D,
-    "navierstokes2d": NavierStokes2D,
-    "convection1d": Convection1D,
-    "reactiondiffusion1d": ReactionDiffusion1D,
-    "reactiondiffusion2d": ReactionDiffusion2D,
-    "allencahn1d": AllenCahn1D,
-    "allencahn2d": AllenCahn2D,
+    # "burgers1d": Burgers1D,
+    # "helmholtz2d": Helmholtz2D,
+    # "helmholtz2d_steady": Helmholtz2DSteady,
+    # "poisson2d": Poisson2D,
+    # "navierstokes2d": NavierStokes2D,
+    # "convection1d": Convection1D,
+    # "reactiondiffusion1d": ReactionDiffusion1D,
+    # "reactiondiffusion2d": ReactionDiffusion2D,
+    # "allencahn1d": AllenCahn1D,
+    # "allencahn2d": AllenCahn2D,
     "helmholtz2d_steady_patch": Helmholtz2DSteady_patch,
     "helmholtz2d_patch": Helmholtz2D_patch,
 }

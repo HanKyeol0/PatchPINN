@@ -1,520 +1,296 @@
+# pinnlab/experiments/helmholtz2d_patch.py
 """
-helmholtz2d_patch.py - Time-dependent 2D Helmholtz equation with patch-based sampling
-Wave equation: ∂²u/∂t² - c²∇²u + λu = f(x,y,t)
-Fixed version with proper gradient tracking and batch handling.
+Time-dependent 2D Helmholtz (wave-type) with patch-based sampling.
+PDE: u_tt - c^2 (u_xx + u_yy) + λ u = f(x, y, t)
+
+We synthesize an analytic solution u*(x,y,t) and derive f accordingly.
+BC: Dirichlet u|_{∂Ω} = u*(x,y,t)
+IC: u(x,y,t0) = u*(x,y,t0),  and optionally  u_t(x,y,t0) = ∂_t u*(x,y,t0)
 """
 
 import math
-import numpy as np
 import torch
-from pinnlab.experiments.base_patch import BaseExperiment_Patch
-from pinnlab.data.geometries import linspace_2d
+import torch.nn.functional as F
+from typing import Dict, Tuple
+from pinnlab.experiments.base import BaseExperiment_Patch
 from pinnlab.data.patches import extract_xy_patches, attach_time
+from pinnlab.data.geometries import linspace_2d
 from pinnlab.utils.plotting import save_plots_2d
+
+
+def _leaf(x: torch.Tensor) -> torch.Tensor:
+    return x.clone().detach().requires_grad_(True)
 
 
 class Helmholtz2D_patch(BaseExperiment_Patch):
     def __init__(self, cfg, device):
         super().__init__(cfg, device)
-        
-        # Domain bounds
+
+        # Domain
         self.xa, self.xb = cfg["domain"]["x"]
         self.ya, self.yb = cfg["domain"]["y"]
         self.t0, self.t1 = cfg["domain"]["t"]
-        
-        # Patch configuration
-        self.px = cfg["patch"]["x"]  # points per patch in x
-        self.py = cfg["patch"]["y"]  # points per patch in y
-        self.pt = cfg["patch"].get("t", 3)  # points per patch in time
-        self.patch_size = self.px * self.py * self.pt
-        
-        # Grid configuration
-        self.gx = cfg["grid"]["x"]
-        self.gy = cfg["grid"]["y"]
-        self.gt = cfg["grid"]["t"]
-        
-        # Compute grid spacings for finite differences
-        self.dx = (self.xb - self.xa) / (self.gx - 1)
-        self.dy = (self.yb - self.ya) / (self.gy - 1)
-        self.dt = (self.t1 - self.t0) / (self.gt - 1)
-        
-        # Stride
-        self.sx = cfg.get("stride", {}).get("x", self.px)
-        self.sy = cfg.get("stride", {}).get("y", self.py)
-        self.st = cfg.get("stride", {}).get("t", self.pt)
-        
-        # PDE parameters
-        self.c = float(cfg.get("wave_speed", 1.0))
+
+        # Patch/grid (space & time)
+        self.px = int(cfg["patch"]["x"])
+        self.py = int(cfg["patch"]["y"])
+        self.pt = int(cfg["patch"]["t"])
+        self.gx = int(cfg["grid"]["x"])
+        self.gy = int(cfg["grid"]["y"])
+        self.gt = int(cfg["grid"]["t"])
+
+        # Strides & padding
+        self.sx = int(cfg.get("stride", {}).get("x", self.px))
+        self.sy = int(cfg.get("stride", {}).get("y", self.py))
+        self.st = int(cfg.get("stride", {}).get("t", self.pt))
+        self.pad_mode_s = cfg.get("pad", {}).get("space", "reflect")   # reflect|replicate|circular|zero|none
+        self.pad_mode_t = cfg.get("pad", {}).get("time", "reflect")
+
+        # PDE constants
+        self.c = float(cfg.get("c", 1.0))
         self.lam = float(cfg.get("lambda", 0.0))
+
+        # Analytic solution parameters u*(x,y,t) = sin(a1πx) sin(a2πy) cos(ω t + φ)
         self.a1 = float(cfg.get("a1", 1.0))
         self.a2 = float(cfg.get("a2", 1.0))
         self.omega = float(cfg.get("omega", 2.0))
-        
-        # Padding modes
-        self.pad_mode_xy = cfg.get("pad_mode", {}).get("xy", "zero")
-        self.pad_mode_t = cfg.get("pad_mode", {}).get("t", "zero")
-        
-        self.batch_size = cfg.get("batch_size", 16)
-        self.input_dim = 3
-        
-        # Finite difference scheme
-        self.fd_scheme = cfg.get("fd_scheme", "central")  # central, forward, backward
-        
-        print(f"Using finite differences with dx={self.dx:.4f}, dy={self.dy:.4f}, dt={self.dt:.4f}")
-        
-    def u_star(self, x, y, t):
-        """Exact solution."""
-        return torch.sin(self.a1 * math.pi * x) * torch.sin(self.a2 * math.pi * y) * torch.cos(self.omega * math.pi * t)
-    
-    def f(self, x, y, t):
-        """Source term."""
-        k2 = (self.a1**2 + self.a2**2) * (math.pi**2)
-        omega2 = (self.omega * math.pi)**2
-        coeff = -omega2 + self.c**2 * k2 + self.lam
+        self.phi = float(cfg.get("phi", 0.0))
+
+        # Initial condition loss weighting for velocity term
+        self.ic_v_weight = float(cfg.get("ic_v_weight", 1.0))
+
+        # Normalization flags (optional small stabilizers)
+        self.clip_time_grad = float(cfg.get("clip_time_grad", 0.0))  # 0 => off
+
+        # Cached spacings (useful for evaluation grids)
+        self.dx = (self.xb - self.xa) / max(1, self.gx - 1)
+        self.dy = (self.yb - self.ya) / max(1, self.gy - 1)
+
+        # Report
+        print(
+            f"[Helmholtz2D_patch] domain=([{self.xa},{self.xb}]×[{self.ya},{self.yb}]×[{self.t0},{self.t1}]), "
+            f"patch={self.px}x{self.py}x{self.pt}, grid={self.gx}x{self.gy}x{self.gt}, "
+            f"stride=({self.sx},{self.sy},{self.st}), c={self.c}, λ={self.lam}, "
+            f"a=({self.a1},{self.a2}), ω={self.omega}, φ={self.phi}"
+        )
+
+    # -------- Analytic solution & forcing --------
+    def u_star(self, x: torch.Tensor, y: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        return torch.sin(self.a1 * math.pi * x) * torch.sin(self.a2 * math.pi * y) * torch.cos(self.omega * t + self.phi)
+
+    def ut_star(self, x: torch.Tensor, y: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        # ∂_t u* = -ω sin(ax) sin(ay) sin(ωt + φ)
+        return -self.omega * torch.sin(self.a1 * math.pi * x) * torch.sin(self.a2 * math.pi * y) * torch.sin(self.omega * t + self.phi)
+
+    def f(self, x: torch.Tensor, y: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """
+        From u_tt - c^2 ∇^2 u + λ u = f.
+        For u* above, u_tt = -ω^2 u*, ∇^2 u* = -(a1^2+a2^2)π^2 u*.
+        => f = (-ω^2 + c^2 (a1^2+a2^2) π^2 + λ) u*
+        """
+        coeff = (-self.omega ** 2) + (self.c ** 2) * (self.a1 ** 2 + self.a2 ** 2) * (math.pi ** 2) + self.lam
         return coeff * self.u_star(x, y, t)
-    
-    def u0(self, x, y):
-        """Initial condition."""
-        return self.u_star(x, y, torch.zeros_like(x))
-    
-    def ut0(self, x, y):
-        """Initial velocity."""
-        return torch.zeros_like(x)
-    
-    def g_boundary(self, x, y, t):
-        """Boundary condition."""
-        return self.u_star(x, y, t)
-    
-    def sample_patches(self):
-        """Sample patches in space-time domain."""
-        spatial_patches = extract_xy_patches(
-            self.xa, self.xb, self.ya, self.yb,
-            self.gx, self.gy, self.px, self.py,
-            self.sx, self.sy, self.pad_mode_xy, self.device
+
+    # -------- Sampling --------
+    def sample_patches(self) -> Dict[str, torch.Tensor]:
+        """
+        Build spatiotemporal patches and masks in one pass.
+        Returns dict with keys: 'coords','valid','is_bnd','is_ic','meta'
+        - coords: [L, P, 3] where P = px*py*pt (after time attach)
+        - valid : [L, P]   (0 for padded points, 1 valid)
+        - is_bnd: [L, P]   (spatial boundary points across all times)
+        - is_ic : [L, P]   (points at t == t0)
+        """
+        dev = self.device
+
+        # Spatial sliding/unfold
+        sp = extract_xy_patches(
+            xa=self.xa, xb=self.xb, ya=self.ya, yb=self.yb,
+            nx=self.gx, ny=self.gy,
+            kx=self.px, ky=self.py,
+            sx=self.sx, sy=self.sy,
+            pad_mode=self.pad_mode_s,
+            device=dev,
         )
-        
-        patches_3d = attach_time(
-            spatial_patches,
-            self.t0, self.t1, self.gt,
-            self.pt, self.st, self.pad_mode_t,
-            sample_mode="sliding"
+        # Attach temporal windows (length pt, stride st)
+        st_p = attach_time(
+            sp,
+            t0=self.t0, t1=self.t1, nt=self.gt,
+            kt=self.pt, st=self.st,
+            pad_mode_t=self.pad_mode_t,
         )
-        
-        return patches_3d
-    
-    def sample_batch(self, *_, **__):
-        """Sample batch compatible with training loop."""
-        patches = self.sample_patches()
+        return st_p  # coords:[L, P3, 3], valid:[L,P3], is_bnd:[L,P3], is_ic:[L,P3]
+
+    def sample_batch(self, *_args, **_kwargs) -> Dict[str, Dict[str, torch.Tensor]]:
+        """
+        Train loop expects these keys to decide which losses to compute.
+        We'll reuse the same coords/masks for all three heads.
+        """
+        P = self.sample_patches()
         return {
-            "patches": patches,
-            "X_f": patches["coords"],
-            "X_b": None,
-            "X_0": None
+            "X_f": P,              # for PDE residual (interior)
+            "X_b": {"coords": P["coords"], "mask": P["is_bnd"]},  # for BC
+            "X_0": {"coords": P["coords"], "mask": P["is_ic"]},   # for IC
         }
-    
-    def _ensure_boolean(self, tensor):
-        """Convert to boolean if needed."""
-        return tensor > 0.5 if tensor.dtype != torch.bool else tensor
-    
-    def _compute_finite_differences_on_patch(self, u_patch, dx, dy, dt):
+
+    # -------- Losses --------
+    def _forward_points(self, model, X: torch.Tensor) -> torch.Tensor:
         """
-        Compute finite difference derivatives on a structured patch.
-        
-        Args:
-            u_patch: [px, py, pt] tensor of u values on the patch grid
-            dx, dy, dt: grid spacings
-            
-        Returns:
-            u_xx, u_yy, u_tt at interior points
+        model() can accept [N,3] (PatchFFN tolerates variable P).
+        Returns [N,1]
         """
-        px, py, pt = u_patch.shape
-        
-        # For second derivatives, we need at least 3 points in each dimension
-        if px < 3 or py < 3 or pt < 3:
-            # Return zeros for edge cases
-            return (torch.zeros(1, device=u_patch.device),
-                   torch.zeros(1, device=u_patch.device),
-                   torch.zeros(1, device=u_patch.device),
-                   torch.zeros(1, 3, device=u_patch.device))
-        
-        # Central differences for second derivatives
-        # ∂²u/∂x² ≈ (u[i+1,j,k] - 2*u[i,j,k] + u[i-1,j,k]) / dx²
-        u_xx = (u_patch[2:, 1:-1, 1:-1] - 2*u_patch[1:-1, 1:-1, 1:-1] + u_patch[:-2, 1:-1, 1:-1]) / (dx**2)
-        
-        # ∂²u/∂y² ≈ (u[i,j+1,k] - 2*u[i,j,k] + u[i,j-1,k]) / dy²
-        u_yy = (u_patch[1:-1, 2:, 1:-1] - 2*u_patch[1:-1, 1:-1, 1:-1] + u_patch[1:-1, :-2, 1:-1]) / (dy**2)
-        
-        # ∂²u/∂t² ≈ (u[i,j,k+1] - 2*u[i,j,k] + u[i,j,k-1]) / dt²
-        u_tt = (u_patch[1:-1, 1:-1, 2:] - 2*u_patch[1:-1, 1:-1, 1:-1] + u_patch[1:-1, 1:-1, :-2]) / (dt**2)
-        
-        # Get interior coordinates (where all derivatives are defined)
-        interior_coords = []
-        for i in range(1, px-1):
-            for j in range(1, py-1):
-                for k in range(1, pt-1):
-                    interior_coords.append([i, j, k])
-        
-        interior_coords = torch.tensor(interior_coords, device=u_patch.device)
-        
-        # Flatten the derivatives
-        u_xx = u_xx.reshape(-1)
-        u_yy = u_yy.reshape(-1)
-        u_tt = u_tt.reshape(-1)
-        
-        return u_xx, u_yy, u_tt, interior_coords
-    
-    def pde_residual_loss(self, model, batch):
-        """PDE residual loss using finite differences."""
-        device = self.device
-        
-        if "patches" not in batch:
-            return torch.tensor(1e-10, device=device, requires_grad=True)
-        
-        patches = batch["patches"]
-        coords = patches["coords"]  # [L*Nt, P*kt, 3]
-        valid = self._ensure_boolean(patches["valid"])
-        is_bnd = self._ensure_boolean(patches["is_bnd"])
-        is_ic = self._ensure_boolean(patches["is_ic"])
-        
-        # Process patches
-        total_patches = coords.size(0)
-        all_losses = []
-        
-        for patch_idx in range(min(total_patches, self.batch_size)):
-            patch_coords = coords[patch_idx]  # [P*kt, 3]
-            patch_valid = valid[patch_idx]
-            patch_bnd = is_bnd[patch_idx]
-            patch_ic = is_ic[patch_idx]
-            
-            # Skip if patch doesn't have enough interior points
-            if not patch_valid.any():
-                continue
-            
-            # Reshape patch to grid structure [px, py, pt]
-            # Assuming the patch is ordered correctly
-            patch_coords_grid = patch_coords.reshape(self.px, self.py, self.pt, 3)
-            
-            # Get the patch bounds to create a local grid
-            x_min = patch_coords_grid[:, :, :, 0].min()
-            x_max = patch_coords_grid[:, :, :, 0].max()
-            y_min = patch_coords_grid[:, :, :, 1].min()
-            y_max = patch_coords_grid[:, :, :, 1].max()
-            t_min = patch_coords_grid[:, :, :, 2].min()
-            t_max = patch_coords_grid[:, :, :, 2].max()
-            
-            # Create stencil for finite differences
-            # We need to evaluate at grid points for the stencil
-            x_grid = torch.linspace(x_min, x_max, self.px, device=device)
-            y_grid = torch.linspace(y_min, y_max, self.py, device=device)
-            t_grid = torch.linspace(t_min, t_max, self.pt, device=device)
-            
-            # Create meshgrid for evaluation
-            X_grid, Y_grid, T_grid = torch.meshgrid(x_grid, y_grid, t_grid, indexing='ij')
-            
-            # Flatten and evaluate model at all grid points
-            grid_points = torch.stack([
-                X_grid.reshape(-1),
-                Y_grid.reshape(-1),
-                T_grid.reshape(-1)
-            ], dim=1)  # [px*py*pt, 3]
-            
-            # Ensure grid_points requires grad for backprop
-            grid_points = grid_points.requires_grad_(True)
-            
-            # Forward through model
-            u_flat = model(grid_points.unsqueeze(0)).squeeze(0)  # [px*py*pt, 1]
-            if u_flat.dim() > 1:
-                u_flat = u_flat.squeeze(-1)
-            
-            # Reshape to grid
-            u_patch = u_flat.reshape(self.px, self.py, self.pt)
-            
-            # Compute finite differences
-            u_xx, u_yy, u_tt, interior_indices = self._compute_finite_differences_on_patch(
-                u_patch, self.dx, self.dy, self.dt
-            )
-            
-            if len(interior_indices) == 0:
-                continue
-            
-            # Get interior coordinates for source term evaluation
-            interior_coords_list = []
-            for idx in interior_indices:
-                i, j, k = idx[0].item(), idx[1].item(), idx[2].item()
-                interior_coords_list.append([
-                    X_grid[i, j, k],
-                    Y_grid[i, j, k],
-                    T_grid[i, j, k]
-                ])
-            
-            if len(interior_coords_list) > 0:
-                interior_coords_tensor = torch.stack([torch.stack(c) for c in interior_coords_list])
-                
-                # Get u values at interior points
-                u_interior = []
-                for idx in interior_indices:
-                    i, j, k = idx[0].item(), idx[1].item(), idx[2].item()
-                    u_interior.append(u_patch[i, j, k])
-                u_interior = torch.stack(u_interior)
-                
-                # Evaluate source term
-                f_vals = self.f(
-                    interior_coords_tensor[:, 0],
-                    interior_coords_tensor[:, 1],
-                    interior_coords_tensor[:, 2]
-                )
-                
-                # PDE residual: ∂²u/∂t² - c²∇²u + λu - f = 0
-                laplacian = u_xx + u_yy
-                residual = u_tt - self.c**2 * laplacian + self.lam * u_interior - f_vals
-                
-                all_losses.append((residual ** 2).mean())
-        
-        if len(all_losses) == 0:
-            return torch.tensor(1e-10, device=device, requires_grad=True)
-        
-        return torch.stack(all_losses).mean()
-    
-    def boundary_loss(self, model, batch):
-        """Boundary loss - still uses direct evaluation."""
-        device = self.device
-        
-        if "patches" not in batch:
-            return torch.tensor(1e-10, device=device, requires_grad=True)
-        
-        patches = batch["patches"]
-        coords = patches["coords"]
-        valid = self._ensure_boolean(patches["valid"])
-        is_bnd = self._ensure_boolean(patches["is_bnd"])
-        
-        bnd_mask = valid & is_bnd
-        
-        if not bnd_mask.any():
-            return torch.tensor(1e-10, device=device, requires_grad=True)
-        
-        bnd_coords = coords[bnd_mask]
-        n_bnd = len(bnd_coords)
-        all_losses = []
-        
-        for i in range(0, n_bnd, self.patch_size):
-            batch_end = min(i + self.patch_size, n_bnd)
-            batch_coords = bnd_coords[i:batch_end]
-            
-            # Pad if needed
-            if len(batch_coords) < self.patch_size:
-                pad_size = self.patch_size - len(batch_coords)
-                pad_coords = torch.zeros(pad_size, 3, device=device)
-                batch_coords_padded = torch.cat([batch_coords, pad_coords], dim=0)
-                actual_size = batch_end - i
-            else:
-                batch_coords_padded = batch_coords
-                actual_size = self.patch_size
-            
-            # Ensure gradient tracking
-            batch_coords_padded = batch_coords_padded.requires_grad_(True)
-            
-            # Forward
-            u_pred = model(batch_coords_padded.unsqueeze(0)).squeeze(0)
-            if u_pred.dim() > 1:
-                u_pred = u_pred[:actual_size, 0]
-            else:
-                u_pred = u_pred[:actual_size]
-            
-            # True values
-            x_b = batch_coords[:actual_size, 0]
-            y_b = batch_coords[:actual_size, 1]
-            t_b = batch_coords[:actual_size, 2]
-            u_true = self.g_boundary(x_b, y_b, t_b)
-            
-            all_losses.append(((u_pred - u_true) ** 2).mean())
-        
-        if len(all_losses) == 0:
-            return torch.tensor(1e-10, device=device, requires_grad=True)
-        
-        return torch.stack(all_losses).mean()
-    
-    def initial_loss(self, model, batch):
-        """Initial condition loss using finite differences for velocity."""
-        device = self.device
-        
-        if "patches" not in batch:
-            return torch.tensor(1e-10, device=device, requires_grad=True)
-        
-        patches = batch["patches"]
-        coords = patches["coords"]
-        valid = self._ensure_boolean(patches["valid"])
-        is_ic = self._ensure_boolean(patches["is_ic"])
-        
-        ic_mask = valid & is_ic
-        
-        if not ic_mask.any():
-            return torch.tensor(1e-10, device=device, requires_grad=True)
-        
-        # For initial conditions, we need to evaluate at t=0 and t=dt
-        ic_coords = coords[ic_mask]
-        n_ic = len(ic_coords)
-        all_losses_u0 = []
-        all_losses_ut0 = []
-        
-        for i in range(0, n_ic, self.patch_size):
-            batch_end = min(i + self.patch_size, n_ic)
-            batch_coords = ic_coords[i:batch_end]
-            
-            # Evaluate at t=0
-            coords_t0 = batch_coords.clone()
-            coords_t0[:, 2] = self.t0
-            
-            # Evaluate at t=dt for finite difference of ∂u/∂t
-            coords_t1 = batch_coords.clone()
-            coords_t1[:, 2] = self.t0 + self.dt
-            
-            # Pad if needed
-            if len(coords_t0) < self.patch_size:
-                pad_size = self.patch_size - len(coords_t0)
-                pad_coords = torch.zeros(pad_size, 3, device=device)
-                coords_t0_padded = torch.cat([coords_t0, pad_coords], dim=0)
-                coords_t1_padded = torch.cat([coords_t1, pad_coords], dim=0)
-                actual_size = batch_end - i
-            else:
-                coords_t0_padded = coords_t0
-                coords_t1_padded = coords_t1
-                actual_size = self.patch_size
-            
-            # Ensure gradient tracking
-            coords_t0_padded = coords_t0_padded.requires_grad_(True)
-            coords_t1_padded = coords_t1_padded.requires_grad_(True)
-            
-            # Forward at t=0
-            u_t0 = model(coords_t0_padded.unsqueeze(0)).squeeze(0)
-            if u_t0.dim() > 1:
-                u_t0 = u_t0[:actual_size, 0]
-            else:
-                u_t0 = u_t0[:actual_size]
-            
-            # Forward at t=dt
-            u_t1 = model(coords_t1_padded.unsqueeze(0)).squeeze(0)
-            if u_t1.dim() > 1:
-                u_t1 = u_t1[:actual_size, 0]
-            else:
-                u_t1 = u_t1[:actual_size]
-            
-            # Initial value loss
-            x_ic = batch_coords[:actual_size, 0]
-            y_ic = batch_coords[:actual_size, 1]
-            u0_true = self.u0(x_ic, y_ic)
-            all_losses_u0.append(((u_t0 - u0_true) ** 2).mean())
-            
-            # Initial velocity loss using forward difference
-            # ∂u/∂t ≈ (u(t+dt) - u(t)) / dt
-            u_t_approx = (u_t1 - u_t0) / self.dt
-            ut0_true = self.ut0(x_ic, y_ic)
-            all_losses_ut0.append(((u_t_approx - ut0_true) ** 2).mean())
-        
-        if len(all_losses_u0) == 0:
-            return torch.tensor(1e-10, device=device, requires_grad=True)
-        
-        loss_u0 = torch.stack(all_losses_u0).mean()
-        loss_ut0 = torch.stack(all_losses_ut0).mean() if all_losses_ut0 else torch.tensor(0.0, device=device)
-        
-        return loss_u0 + loss_ut0
-    
-    def relative_l2_on_grid(self, model, grid_cfg):
-        """Compute relative L2 error."""
-        nx, ny = grid_cfg["nx"], grid_cfg["ny"]
-        device = self.device
-        t_eval = self.t1
-        
-        Xg, Yg = linspace_2d(self.xa, self.xb, self.ya, self.yb, nx, ny, device)
-        Tg = torch.full_like(Xg, t_eval)
-        
+        U = model(X)
+        if U.dim() == 1:
+            U = U[:, None]
+        if U.shape[-1] != 1:
+            U = U[..., :1]
+        return U  # [N,1]
+
+    def pde_residual_loss(self, model, batch) -> torch.Tensor:
+        """
+        r = u_tt - c^2 (u_xx + u_yy) + λ u - f = 0  on valid interior points (not on spatial boundary).
+        """
+        dev = self.device
+        P = batch["X_f"]
+        coords = P["coords"].to(dev)      # [L, P, 3]
+        valid = P["valid"].to(dev) > 0.5  # [L, P]
+        is_bnd = P["is_bnd"].to(dev) > 0.5
+
+        # Keep valid non-boundary points
+        keep = (valid & (~is_bnd)).reshape(-1)
+        if not torch.any(keep):
+            return torch.tensor(0.0, device=dev, requires_grad=True)
+
+        Xall = coords.reshape(-1, 3)
+        X = _leaf(Xall[keep])             # [N,3] (x,y,t)
+
+        # Forward
+        U = self._forward_points(model, X)        # [N,1]
+
+        # First derivatives
+        gU = torch.autograd.grad(U, X, torch.ones_like(U), create_graph=True, retain_graph=True)[0]  # [N,3]
+        u_x = gU[:, 0:1]
+        u_y = gU[:, 1:2]
+        u_t = gU[:, 2:3]
+
+        # Second derivatives
+        gux = torch.autograd.grad(u_x, X, torch.ones_like(u_x), create_graph=True, retain_graph=True)[0]
+        guy = torch.autograd.grad(u_y, X, torch.ones_like(u_y), create_graph=True, retain_graph=True)[0]
+        gut = torch.autograd.grad(u_t, X, torch.ones_like(u_t), create_graph=True, retain_graph=True)[0]
+        u_xx = gux[:, 0:1]
+        u_yy = guy[:, 1:2]
+        u_tt = gut[:, 2:1+2]  # [:,2:3]
+
+        # PDE residual
+        fxyt = self.f(X[:, 0], X[:, 1], X[:, 2]).unsqueeze(-1)
+        r = u_tt - (self.c ** 2) * (u_xx + u_yy) + self.lam * U - fxyt
+
+        loss = (r ** 2).mean()
+        return loss
+
+    def boundary_loss(self, model, batch) -> torch.Tensor:
+        """
+        Dirichlet: u(x,y,t) = u*(x,y,t) for spatial boundary over all times.
+        """
+        dev = self.device
+        if batch.get("X_b") is None:
+            return torch.tensor(0.0, device=dev, requires_grad=True)
+
+        coords = batch["X_b"]["coords"].to(dev)      # [L,P,3]
+        bmask  = batch["X_b"]["mask"].to(dev) > 0.5  # [L,P]
+        keep = bmask.reshape(-1)
+        if not torch.any(keep):
+            return torch.tensor(0.0, device=dev, requires_grad=True)
+
+        X = coords.reshape(-1, 3)[keep]              # [Nb,3]
+        U = self._forward_points(model, _leaf(X))    # [Nb,1]
+        U_ref = self.u_star(X[:, 0], X[:, 1], X[:, 2]).unsqueeze(-1)
+        return ((U - U_ref) ** 2).mean()
+
+    def initial_loss(self, model, batch) -> torch.Tensor:
+        """
+        IC: u(x,y,t0) = u*(x,y,t0) and (optional) u_t(x,y,t0) = ∂_t u*(x,y,t0).
+        Controlled by self.ic_v_weight.
+        """
+        dev = self.device
+        if batch.get("X_0") is None:
+            return torch.tensor(0.0, device=dev, requires_grad=True)
+
+        coords = batch["X_0"]["coords"].to(dev)     # [L,P,3]
+        imask  = batch["X_0"]["mask"].to(dev) > 0.5 # [L,P]
+        keep = imask.reshape(-1)
+        if not torch.any(keep):
+            return torch.tensor(0.0, device=dev, requires_grad=True)
+
+        X = coords.reshape(-1, 3)[keep]             # [N0,3], t≈t0
+        X = _leaf(X)
+
+        # Displacement IC
+        U = self._forward_points(model, X)          # [N0,1]
+        U_ref = self.u_star(X[:, 0], X[:, 1], X[:, 2]).unsqueeze(-1)
+        L_u = ((U - U_ref) ** 2).mean()
+
+        # Velocity IC (optional)
+        L_v = torch.tensor(0.0, device=dev)
+        if self.ic_v_weight > 0.0:
+            gU = torch.autograd.grad(U, X, torch.ones_like(U), create_graph=True, retain_graph=True)[0]
+            u_t = gU[:, 2:3]
+            ut_ref = self.ut_star(X[:, 0], X[:, 1], X[:, 2]).unsqueeze(-1)
+            L_v = ((u_t - ut_ref) ** 2).mean()
+
+        return L_u + self.ic_v_weight * L_v
+
+    # -------- Evaluation & Plots --------
+    def relative_l2_on_grid(self, model, grid_cfg) -> float:
+        """
+        Evaluate mean relative L2 across a few time slices (nt_eval).
+        grid_cfg expects: nx, ny, nt (nt optional; default=5).
+        """
+        dev = self.device
+        nx, ny = int(grid_cfg["nx"]), int(grid_cfg["ny"])
+        nt_eval = int(grid_cfg.get("nt", 5))
+
+        Xg, Yg = linspace_2d(self.xa, self.xb, self.ya, self.yb, nx, ny, dev)
+        ts = torch.linspace(self.t0, self.t1, nt_eval, device=dev)
+
         with torch.no_grad():
-            U_pred = torch.zeros(nx, ny, device=device)
-            
-            for i in range(0, nx, self.px):
-                for j in range(0, ny, self.py):
-                    i_end = min(i + self.px, nx)
-                    j_end = min(j + self.py, ny)
-                    
-                    x_patch = Xg[i:i_end, j:j_end].reshape(-1)
-                    y_patch = Yg[i:i_end, j:j_end].reshape(-1)
-                    spatial_size = len(x_patch)
-                    
-                    # Create 3D patch
-                    coords = []
-                    for _ in range(self.pt):
-                        t_patch = torch.full((spatial_size,), t_eval, device=device)
-                        coords.append(torch.stack([x_patch, y_patch, t_patch], dim=1))
-                    coords = torch.cat(coords, dim=0)
-                    
-                    # Pad if needed
-                    if len(coords) < self.patch_size:
-                        pad_size = self.patch_size - len(coords)
-                        coords = torch.cat([coords, torch.zeros(pad_size, 3, device=device)], dim=0)
-                    
-                    u_patch = model(coords.unsqueeze(0)).squeeze()
-                    if u_patch.dim() > 1:
-                        u_patch = u_patch[:, 0]
-                    
-                    # Average over time dimension
-                    u_spatial = u_patch[:spatial_size * self.pt].reshape(self.pt, spatial_size).mean(dim=0)
-                    U_pred[i:i_end, j:j_end] = u_spatial.reshape(i_end - i, j_end - j)
-            
-            U_true = self.u_star(Xg, Yg, Tg)
-            num = torch.linalg.norm((U_pred - U_true).reshape(-1))
-            den = torch.linalg.norm(U_true.reshape(-1))
-            return (num / (den + 1e-8)).item()
-    
+            rels = []
+            for t in ts:
+                XY = torch.stack([Xg.reshape(-1), Yg.reshape(-1)], dim=1)
+                T = torch.full((XY.shape[0], 1), float(t), device=dev)
+                coords = torch.cat([XY, T], dim=1)                     # [nx*ny, 3]
+                up = self._forward_points(model, coords).reshape(nx, ny)
+                ut = self.u_star(Xg, Yg, t.expand_as(Xg))
+                num = torch.linalg.norm((up - ut).reshape(-1))
+                den = torch.linalg.norm(ut.reshape(-1)) + 1e-12
+                rels.append((num / den).item())
+            return float(sum(rels) / max(1, len(rels)))
+
     def plot_final(self, model, grid_cfg, out_dir):
-        """Generate plots."""
-        nx, ny = grid_cfg["nx"], grid_cfg["ny"]
-        nt = 4
-        
-        time_points = torch.linspace(self.t0, self.t1, nt, device=self.device)
-        Xg, Yg = linspace_2d(self.xa, self.xb, self.ya, self.yb, nx, ny, self.device)
-        
-        all_figs = {}
-        
+        """
+        Save 2D heatmaps (true/pred/abs_error) at a few time slices.
+        """
+        dev = self.device
+        nx, ny = int(grid_cfg["nx"]), int(grid_cfg["ny"])
+        nt_eval = int(grid_cfg.get("nt", 3))
+        ts = torch.linspace(self.t0, self.t1, nt_eval, device=dev)
+
+        Xg, Yg = linspace_2d(self.xa, self.xb, self.ya, self.yb, nx, ny, dev)
+        paths = {}
         with torch.no_grad():
-            for t_idx, t_eval in enumerate(time_points):
-                Tg = torch.full_like(Xg, t_eval)
-                U_pred = torch.zeros(nx, ny, device=self.device)
-                
-                for i in range(0, nx, self.px):
-                    for j in range(0, ny, self.py):
-                        i_end = min(i + self.px, nx)
-                        j_end = min(j + self.py, ny)
-                        
-                        x_patch = Xg[i:i_end, j:j_end].reshape(-1)
-                        y_patch = Yg[i:i_end, j:j_end].reshape(-1)
-                        spatial_size = len(x_patch)
-                        
-                        coords = []
-                        for _ in range(self.pt):
-                            t_patch = torch.full((spatial_size,), t_eval, device=self.device)
-                            coords.append(torch.stack([x_patch, y_patch, t_patch], dim=1))
-                        coords = torch.cat(coords, dim=0)
-                        
-                        if len(coords) < self.patch_size:
-                            pad_size = self.patch_size - len(coords)
-                            coords = torch.cat([coords, torch.zeros(pad_size, 3, device=self.device)], dim=0)
-                        
-                        u_patch = model(coords.unsqueeze(0)).squeeze()
-                        if u_patch.dim() > 1:
-                            u_patch = u_patch[:, 0]
-                        
-                        u_spatial = u_patch[:spatial_size * self.pt].reshape(self.pt, spatial_size).mean(dim=0)
-                        U_pred[i:i_end, j:j_end] = u_spatial.reshape(i_end - i, j_end - j)
-                
-                U_true = self.u_star(Xg, Yg, Tg)
-                
+            for i, t in enumerate(ts):
+                XY = torch.stack([Xg.reshape(-1), Yg.reshape(-1)], dim=1)
+                T = torch.full((XY.shape[0], 1), float(t), device=dev)
+                coords = torch.cat([XY, T], dim=1)
+                up = self._forward_points(model, coords).reshape(nx, ny)
+                ut = self.u_star(Xg, Yg, t.expand_as(Xg))
                 figs = save_plots_2d(
                     Xg.detach().cpu().numpy(),
                     Yg.detach().cpu().numpy(),
-                    U_true.detach().cpu().numpy(),
-                    U_pred.detach().cpu().numpy(),
+                    ut.detach().cpu().numpy(),
+                    up.detach().cpu().numpy(),
                     out_dir,
-                    f"helmholtz2d_t{t_idx:02d}"
+                    prefix=f"helmholtz2d_time_t{i}"
                 )
-                all_figs.update(figs)
-        
-        return all_figs
+                paths.update(figs)
+        return paths

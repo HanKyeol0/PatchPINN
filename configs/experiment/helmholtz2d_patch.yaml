@@ -1,20 +1,20 @@
 # Time-dependent 2D Helmholtz equation configuration
 domain:
-  x: [-2.0, 2.0]
-  y: [-2.0, 2.0]
-  t: [0.0, 2.0]
+  x: [-1.0, 1.0]
+  y: [-1.0, 1.0]
+  t: [0.0, 1.0]
 
 # Patch configuration
 patch:
-  x: 10   # points per patch in x
-  y: 10   # points per patch in y
-  t: 3   # points per patch in time
+  x: 5   # points per patch in x
+  y: 5   # points per patch in y
+  t: 2   # points per patch in time
 
 # Grid configuration (total points)
 grid:
-  x: 100  # total grid points in x
-  y: 100  # total grid points in y
-  t: 30  # total grid points in time
+  x: 42  # total grid points in x
+  y: 42  # total grid points in y
+  t: 20  # total grid points in time
 
 # Stride for overlapping patches (optional)
 stride:
