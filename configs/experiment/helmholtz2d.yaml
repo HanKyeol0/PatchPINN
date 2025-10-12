@@ -1,0 +1,51 @@
+# Time-dependent 2D Helmholtz equation configuration
+domain:
+  x: [-2.0, 2.0]
+  y: [-2.0, 2.0]
+  t: [0.0, 2.0]
+
+# Patch configuration
+patch:
+  x: 7   # points per patch in x
+  y: 7   # points per patch in y
+  t: 3   # points per patch in time
+
+# Grid configuration (total points)
+grid:
+  x: 60  # total grid points in x
+  y: 60  # total grid points in y
+  t: 10  # total grid points in time
+
+# Stride for overlapping patches (optional)
+stride:
+  x: 1   # same as patch.x means non-overlapping
+  y: 1   # same as patch.y means non-overlapping
+  t: 1   # same as patch.t means non-overlapping
+
+# Padding mode for boundary handling
+pad_mode:
+  xy: "zero"  # Options: "zero", "reflect", "replicate", "circular", "none"
+  t: "zero"   # Options: "zero", "reflect", "replicate", "circular", "none"
+
+# PDE parameters
+wave_speed: 1.0  # c in the wave equation
+lambda: 0.0      # damping coefficient
+a1: 1.0          # frequency in x direction
+a2: 4.0          # frequency in y direction
+omega: 2.0       # temporal frequency
+ic_v_weight: 1.0
+
+derivative_method: finite_diff # autograd, finite_diff
+
+# Training
+batch_size: 32   # number of patches per batch
+
+# Override dimensions for compatibility with patch models
+in_features: 3   # (x, y, t)
+out_features: 1  # u(x, y, t)
+
+# Video generation settings
+video:
+  enabled: true
+  fps: 10
+  format: mp4

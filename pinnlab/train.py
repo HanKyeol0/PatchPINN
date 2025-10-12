@@ -221,6 +221,18 @@ def main(args):
 
     training_end_time = time.time()
 
+    if exp_cfg.get("video", {}).get("enabled", False):
+        vid_grid = exp_cfg.get("video", {}).get("grid", {"x": 128, "y": 128})
+        nt_video = exp_cfg.get("video", {}).get("nt", 60)
+        fps      = exp_cfg.get("video", {}).get("fps", 10)
+        out_fmt  = exp_cfg.get("video", {}).get("format", "mp4")  # "mp4" or "gif"
+        vid_path = exp.make_video(
+            model, vid_grid, out_dir,
+            filename=f"evolution.{out_fmt}",
+            nt_video=nt_video, fps=fps,
+        )
+        wandb_log({"video/evolution": wandb.Video(vid_path, format=out_fmt)}, step=global_step)
+
     wandb_log({"train/time_seconds": training_end_time - training_start_time})
 
     weights_png = os.path.join(out_dir, "loss_weights.png")

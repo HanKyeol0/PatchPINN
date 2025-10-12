@@ -1,0 +1,20 @@
+# configs/model/residual_network.yaml
+in_features: 2
+out_features: 1
+hidden_dim: 64
+# Either specify num_blocks OR (optionally) num_layers like in FFN
+num_blocks: 4          # x2 linear layers inside residual trunk
+# num_layers: 14       # (optional) converts to ~6 residual blocks
+
+activation: tanh       # relu/gelu/tanh/sine...
+dropout: 0.0
+norm: none             # or "layernorm"
+pre_norm: true
+res_scale: 1.0
+
+use_fourier_features: true
+fourier_scale: 1.0
+
+patch:
+  x: None
+  y: None

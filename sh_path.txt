@@ -1,14 +1,17 @@
-scripts/patch_ffn/helmholtz2d_steady_patch.sh
-scripts/patch_ffn/helmholtz2d_patch.sh
+scripts/ffn/helmholtz2d_steady.sh
+scripts/ffn/helmholtz2d.sh
 
-scripts/patch_ffn_context/helmholtz2d_steady_patch.sh
+scripts/residual_ffn/helmholtz2d_steady.sh
+scripts/residual_ffn/helmholtz2d.sh
 
-scripts/patch_cnn/helmholtz2d_steady_patch.sh
+scripts/ffn_context/helmholtz2d_steady.sh
 
-scripts/simple_patch_cnn/helmholtz2d_steady_patch.sh
+scripts/cnn/helmholtz2d_steady.sh
 
-scripts/hybrid_cnn/helmholtz2d_steady_patch.sh
+scripts/simple_cnn/helmholtz2d_steady.sh
 
-scripts/patch_unet/helmholtz2d_steady_patch.sh
+scripts/hybrid_cnn/helmholtz2d_steady.sh
 
-scripts/patch_ffn_hard_bc/helmholtz2d_steady_patch.sh
+scripts/unet/helmholtz2d_steady.sh
+
+scripts/ffn_hard_bc/helmholtz2d_steady.sh

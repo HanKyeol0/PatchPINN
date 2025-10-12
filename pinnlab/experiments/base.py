@@ -12,7 +12,7 @@ def grad_sum(y: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         create_graph=True, retain_graph=True
     )[0]
 
-class BaseExperiment_Patch(ABC):
+class BaseExperiment(ABC):
     def __init__(self, cfg, device):
         self.cfg = cfg; self.device = device
 

@@ -1,7 +1,7 @@
 seed: 42
 device: "cuda:0"
 train:
-  epochs: 1000
+  epochs: 50000
   batch:
     n_f: 4096
     n_b: 1024

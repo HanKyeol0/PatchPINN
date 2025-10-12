@@ -1,26 +1,29 @@
 # models
-from pinnlab.models.patch_attention import PatchAttention
-from pinnlab.models.patch_ffn import PatchFFN
-from pinnlab.models.patch_ffn_context import PatchFFNContext
-from pinnlab.models.patch_cnn import PatchCNN, SimplePatchCNN
-from pinnlab.models.patch_unet import UNetPatchCNN
-from pinnlab.models.patch_ffn_hard_bc import PatchFFNHardBC
+from pinnlab.models.attention import Attention
+from pinnlab.models.ffn import FFN
+from pinnlab.models.ffn_context import FFNContext
+from pinnlab.models.cnn import CNN, SimpleCNN
+from pinnlab.models.unet import UNetCNN
+from pinnlab.models.residual_ffn import ResidualFFN
 
 # experiments
-from pinnlab.experiments.helmholtz2d_steady_patch import Helmholtz2DSteady_patch
-from pinnlab.experiments.helmholtz2d_patch import Helmholtz2D_patch
+from pinnlab.experiments.helmholtz2d_steady import Helmholtz2DSteady
+from pinnlab.experiments.helmholtz2d import Helmholtz2D
 
 _MODEL_REG = {
-    "patch_attention": PatchAttention,
-    "patch_ffn": PatchFFN,
-    "patch_ffn_context": PatchFFNContext,
-    "patch_cnn": PatchCNN,
-    "patch_unet": UNetPatchCNN,
-    "patch_ffn_hard_bc": PatchFFNHardBC,
-    "simple_patch_cnn": SimplePatchCNN,
+    "ffn": FFN,
+    "residual_ffn": ResidualFFN,
+    "attention": Attention,
+    "ffn_context": FFNContext,
+    "cnn": CNN,
+    "unet": UNetCNN,
+    "simple_cnn": SimpleCNN,
+    
 }
 
 _EXP_REG = {
+    "helmholtz2d_steady": Helmholtz2DSteady,
+    "helmholtz2d": Helmholtz2D,
     # "burgers1d": Burgers1D,
     # "helmholtz2d": Helmholtz2D,
     # "helmholtz2d_steady": Helmholtz2DSteady,
@@ -31,8 +34,6 @@ _EXP_REG = {
     # "reactiondiffusion2d": ReactionDiffusion2D,
     # "allencahn1d": AllenCahn1D,
     # "allencahn2d": AllenCahn2D,
-    "helmholtz2d_steady_patch": Helmholtz2DSteady_patch,
-    "helmholtz2d_patch": Helmholtz2D_patch,
 }
 
 def get_model(name):     return _MODEL_REG[name]

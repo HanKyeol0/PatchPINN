@@ -1,1 +1,3 @@
 wandb
+imageio
+imageio-ffmpeg
