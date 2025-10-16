@@ -231,7 +231,7 @@ class Poisson2D(BaseExperiment):
         MBc = MB[:, :, 1:-1, 1:-1, 1:-1]
         MOK = (MVc * Mx * My * Mt) * (1.0 - MBc)  # float mask {0,1}
 
-        R = Ut - self.kappa * (Uxx + Uyy + Utt) - Fc # u_t - κ ∇²u = f(x,y,t)
+        R = Ut - self.kappa * (Uxx + Uyy) - Fc # u_t - κ ∇²u = f(x,y,t)
         R2 = (R * MOK) ** 2
 
         denom = torch.clamp(MOK.sum(), min=1.0)
@@ -357,7 +357,7 @@ class Poisson2D(BaseExperiment):
                     ut.detach().cpu().numpy(),
                     up.detach().cpu().numpy(),
                     out_dir,
-                    prefix=f"helmholtz2d_time_t{i}"
+                    prefix=f"poisson2d{i}"
                 )
                 paths.update(figs)
         return paths
@@ -365,7 +365,7 @@ class Poisson2D(BaseExperiment):
 
     def make_video(
         self, model, grid_cfg, out_dir,
-        filename="helmholtz2d_time.mp4", nt_video=60, fps=10,
+        filename="poisson2d.mp4", nt_video=60, fps=10,
         vmin=None, vmax=None, err_vmax=None,
     ):
         """
@@ -403,5 +403,5 @@ class Poisson2D(BaseExperiment):
             U_true_T, U_pred_T, ts_np,
             out_path=video_path, fps=fps,
             vmin=vmin, vmax=vmax, err_vmax=err_vmax,
-            prefix="helmholtz2d"
+            prefix="poisson2d"
         )

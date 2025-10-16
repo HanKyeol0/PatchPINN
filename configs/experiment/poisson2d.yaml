@@ -1,8 +1,8 @@
-# Time-dependent 2D Helmholtz equation configuration
+# Time-dependent 2D Poisson equation configuration
 domain:
   x: [-1.0, 1.0]
   y: [-1.0, 1.0]
-  t: [0.0, 2.0]
+  t: [0.0, 4.0]
 
 # Patch configuration
 patch:
@@ -12,9 +12,9 @@ patch:
 
 # Grid configuration (total points)
 grid:
-  x: 60  # total grid points in x
-  y: 60  # total grid points in y
-  t: 20  # total grid points in time
+  x: 50  # total grid points in x
+  y: 50  # total grid points in y
+  t: 40  # total grid points in time
 
 # Stride for overlapping patches (optional)
 stride:
@@ -28,8 +28,8 @@ pad_mode:
   t: "zero"   # Options: "zero", "reflect", "replicate", "circular", "none"
 
 # PDE parameters
-kappa: 1.0      # diffusion coefficient
-lam: 1.0       # reaction rate
+kappa: 3.0      # diffusion coefficient
+lam: 2.0       # reaction rate
 
 derivative_method: finite_diff # autograd, finite_diff
 
