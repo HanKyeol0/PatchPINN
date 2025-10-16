@@ -9,6 +9,7 @@ from pinnlab.models.residual_ffn import ResidualFFN
 # experiments
 from pinnlab.experiments.helmholtz2d_steady import Helmholtz2DSteady
 from pinnlab.experiments.helmholtz2d import Helmholtz2D
+from pinnlab.experiments.allencahn2d import AllenCahn2D
 
 _MODEL_REG = {
     "ffn": FFN,
@@ -18,22 +19,19 @@ _MODEL_REG = {
     "cnn": CNN,
     "unet": UNetCNN,
     "simple_cnn": SimpleCNN,
-    
 }
 
 _EXP_REG = {
     "helmholtz2d_steady": Helmholtz2DSteady,
     "helmholtz2d": Helmholtz2D,
+    "allencahn2d": AllenCahn2D,
     # "burgers1d": Burgers1D,
-    # "helmholtz2d": Helmholtz2D,
-    # "helmholtz2d_steady": Helmholtz2DSteady,
     # "poisson2d": Poisson2D,
     # "navierstokes2d": NavierStokes2D,
     # "convection1d": Convection1D,
     # "reactiondiffusion1d": ReactionDiffusion1D,
     # "reactiondiffusion2d": ReactionDiffusion2D,
     # "allencahn1d": AllenCahn1D,
-    # "allencahn2d": AllenCahn2D,
 }
 
 def get_model(name):     return _MODEL_REG[name]

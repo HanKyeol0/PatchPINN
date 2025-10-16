@@ -5,8 +5,8 @@ patch:
   x: 5       # Must match model config
   y: 5       # Must match model config (64 points per patch)
 grid:
-  x: 100     # Total grid points in x
-  y: 100     # Total grid points in y
+  x: 60     # Total grid points in x
+  y: 60     # Total grid points in y
 stride:
   x: 1
   y: 1

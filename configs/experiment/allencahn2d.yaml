@@ -28,12 +28,8 @@ pad_mode:
   t: "zero"   # Options: "zero", "reflect", "replicate", "circular", "none"
 
 # PDE parameters
-wave_speed: 1.0  # c in the wave equation
-lambda: 0.0      # damping coefficient
-a1: 1.0          # frequency in x direction
-a2: 4.0          # frequency in y direction
-omega: 2.0       # temporal frequency
-ic_v_weight: 1.0
+eps: 0.01      # interface thickness
+omega: 2.0     # temporal frequency
 
 derivative_method: finite_diff # autograd, finite_diff
 

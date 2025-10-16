@@ -1,11 +1,7 @@
 seed: 42
 device: "cuda:0"
 train:
-  epochs: 50000
-  batch:
-    n_f: 4096
-    n_b: 1024
-    n_0: 1024
+  epochs: 30000
   optimizer:
     name: adam
     lr: 5.0e-4  # Lower for stability with transformers
@@ -21,7 +17,7 @@ train:
   loss_balancer:
     use_loss_balancer: true
     kind: dwa
-    terms: [res, bc]  # No IC for steady state
+    terms: [res, bc, ic]  # No IC for steady state
     alpha: 0.15
     gamma: 0.5
     update_every: 20
@@ -35,9 +31,9 @@ log:
     mode: "online"
 eval:
   grid:
-    nx: 201
-    ny: 201
-    nt: 100
+    nx: 61
+    ny: 61
+    nt: 20
   every: 1000
 gradflow:
   enabled: false

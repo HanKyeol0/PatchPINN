@@ -30,9 +30,9 @@ activation: tanh  # tanh often works better for PINNs
 
 # Patch dimensions must match experiment config
 patch:
-  x: None   # Must match experiment config
-  y: None   # Must match experiment config
-  t: None   # Must match experiment config, P = 3 * 3 * 3 = 27
+  x: None
+  y: None
+  t: None
 
 # Fourier features for better position encoding
 use_fourier_features: true
