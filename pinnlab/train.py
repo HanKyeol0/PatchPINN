@@ -3,6 +3,7 @@ import torch
 import wandb
 import csv
 from tqdm import trange
+from collections import deque
 from pinnlab.registry import get_model, get_experiment
 from pinnlab.utils.seed import seed_everything
 from pinnlab.utils.early_stopping import EarlyStopping
@@ -39,6 +40,8 @@ def main(args):
     device = torch.device(base_cfg["device"] if torch.cuda.is_available() else "cpu")
     exp = get_experiment(args.experiment_name)(exp_cfg, device)
     model = get_model(args.model_name)(model_cfg).to(device)
+
+    torch.cuda.reset_peak_memory_stats(device)
 
     # Logging dir
     ts = time.strftime("%Y%m%d-%H%M%S")
@@ -116,10 +119,6 @@ def main(args):
     w_bc = base_cfg["train"]["loss_weights"]["bc"]
     w_ic = base_cfg["train"]["loss_weights"]["ic"]
 
-    n_f = exp_cfg.get("batch", {}).get("n_f", base_cfg["train"]["batch"]["n_f"])
-    n_b = exp_cfg.get("batch", {}).get("n_b", base_cfg["train"]["batch"]["n_b"])
-    n_0 = exp_cfg.get("batch", {}).get("n_0", base_cfg["train"]["batch"]["n_0"])
-
     use_tty = sys.stdout.isatty()
     pbar = trange(
         epochs,
@@ -137,6 +136,10 @@ def main(args):
     global_step = 1
 
     training_start_time = time.time()
+
+    last_iter_time = training_start_time
+    iter_time_accum = 0.0
+    iter_count = 0
 
     for ep in pbar:
         model.train()
@@ -178,6 +181,16 @@ def main(args):
         total_loss.backward()
         optimizer.step()
 
+        torch.cuda.synchronize(device)
+
+        it_per_sec = pbar.format_dict.get("rate", None)         # float or None
+        elapsed_s  = pbar.format_dict.get("elapsed", None)      # seconds (float)
+
+        gpu_now = {
+            "gpu/mem_alloc_mb": float(torch.cuda.memory_allocated(device)) / (1024**2),
+            "gpu/mem_reserved_mb": float(torch.cuda.memory_reserved(device)) / (1024**2),
+        }
+
         # Log
         log_dict = {
             "loss/total": total_loss.item(),
@@ -197,6 +210,12 @@ def main(args):
         # Combine all metrics
         all_metrics = {**log_dict, **log_payload}
 
+        all_metrics.update({
+            "perf/it_per_sec_tqdm": it_per_sec if it_per_sec is not None else 0.0,
+            "perf/elapsed_sec": elapsed_s if elapsed_s is not None else 0.0,
+            **gpu_now,
+        })
+
         # Simple validation metric (relative L2 on a fixed grid)
         best_path = os.path.join(out_dir, "best.pt")
         if ep % eval_every == 0 or ep == epochs-1:
@@ -215,11 +234,19 @@ def main(args):
 
         # Log everything for this step at once
         wandb_log(all_metrics, step=global_step, commit=True)
-        pbar.set_postfix({k: f"{v:.3e}" for k,v in all_metrics.items() if "loss" in k})
+        pbar.set_postfix({**{k: f"{v:.3e}" for k,v in all_metrics.items() if "loss" in k},
+                        "it/s": f"{(it_per_sec or 0.0):.2f}"})
 
         global_step += 1
 
+    global_step -= 1  # last increment was extra
     training_end_time = time.time()
+
+    final_perf = {
+        "perf/total_time_sec": training_end_time - training_start_time,
+        "gpu/peak_mem_alloc_mb": float(torch.cuda.max_memory_allocated(device)) / (1024**2),
+        "gpu/peak_mem_reserved_mb": float(torch.cuda.max_memory_reserved(device)) / (1024**2),
+    }
 
     if exp_cfg.get("video", {}).get("enabled", False):
         vid_grid = exp_cfg.get("video", {}).get("grid", {"x": 128, "y": 128})
@@ -233,7 +260,7 @@ def main(args):
         )
         wandb_log({"video/evolution": wandb.Video(vid_path, format=out_fmt)}, step=global_step)
 
-    wandb_log({"train/time_seconds": training_end_time - training_start_time})
+    wandb_log(final_perf, step=global_step)
 
     weights_png = os.path.join(out_dir, "loss_weights.png")
     plot_weights_over_time(weights_csv, weights_png)
