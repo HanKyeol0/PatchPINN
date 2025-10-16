@@ -76,11 +76,8 @@ class AllenCahn2D(BaseExperiment):
         return - self.omega * torch.sin(math.pi * x) * torch.sin(math.pi * y) * torch.sin(self.omega * t)
 
     def f(self, x: torch.Tensor, y: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        sxy   = torch.sin(math.pi * x) * torch.sin(math.pi * y)
-        coswt = torch.cos(self.omega * t)
-        sinwt = torch.sin(self.omega * t)
-        u     = sxy * coswt
-        ut    = - self.omega * sxy * sinwt
+        u     = self.u_star(x, y, t)
+        ut    = self.ut_star(x, y, t)
         lap_u = - 2.0 * (math.pi ** 2) * u
         return ut - (self.eps ** 2) * lap_u + (u ** 3 - u)
 
