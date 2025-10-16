@@ -10,6 +10,7 @@ from pinnlab.models.residual_ffn import ResidualFFN
 from pinnlab.experiments.helmholtz2d_steady import Helmholtz2DSteady
 from pinnlab.experiments.helmholtz2d import Helmholtz2D
 from pinnlab.experiments.allencahn2d import AllenCahn2D
+from pinnlab.experiments.poisson2d import Poisson2D
 
 _MODEL_REG = {
     "ffn": FFN,
@@ -25,8 +26,8 @@ _EXP_REG = {
     "helmholtz2d_steady": Helmholtz2DSteady,
     "helmholtz2d": Helmholtz2D,
     "allencahn2d": AllenCahn2D,
+    "poisson2d": Poisson2D,
     # "burgers1d": Burgers1D,
-    # "poisson2d": Poisson2D,
     # "navierstokes2d": NavierStokes2D,
     # "convection1d": Convection1D,
     # "reactiondiffusion1d": ReactionDiffusion1D,

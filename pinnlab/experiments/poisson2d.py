@@ -1,4 +1,4 @@
-# pinnlab/experiments/helmholtz2d.py
+# pinnlab/experiments/poisson2d.py
 import math, os, numpy as np
 import torch
 from typing import Dict
@@ -11,12 +11,20 @@ def _leaf(x: torch.Tensor) -> torch.Tensor:
     # kept for API symmetry; not used for FD path but harmless
     return x.clone().detach().requires_grad_(True)
 
-class Helmholtz2D(BaseExperiment):
+class Poisson2D(BaseExperiment):
     """
-    PDE: u_tt - c^2 (u_xx + u_yy) + λ u = f(x,y,t)
-    Analytic target (for supervision of BC/IC/metrics):
-        u* = sin(a1πx) sin(a2πy) cos(ω t + φ)
-        f  = (-ω^2 + c^2 (a1^2+a2^2) π^2 + λ) u*
+    time-dependent Poisson:
+
+    - Time-dependent Heat:
+        u_t - κ ∇²u = f(x,y,t)
+        Choose u*(x,y,t) = sin(pi x) sin(pi y) exp(-λ t)
+        ∇²u* = -2π² u*,
+        u_t = -λ u*
+        residual = (-λ + 2 κ π²) u* - f
+        If λ = 2 κ π²  =>  f ≡ 0 (homogeneous). BC and IC from u*.
+
+    Config keys:
+      kappa, lambda ('auto') if time_dependent
     """
 
     def __init__(self, cfg, device):
@@ -43,14 +51,8 @@ class Helmholtz2D(BaseExperiment):
         self.pad_mode_t = cfg.get("pad", {}).get("time", "reflect")
 
         # PDE constants
-        self.c   = float(cfg.get("c", 1.0))
-        self.lam = float(cfg.get("lambda", 0.0))
-
-        # Analytic u* params
-        self.a1   = float(cfg.get("a1", 1.0))
-        self.a2   = float(cfg.get("a2", 1.0))
-        self.omega= float(cfg.get("omega", 2.0))
-        self.phi  = float(cfg.get("phi", 0.0))
+        self.kappa = float(cfg.get("kappa", 1.0))
+        self.lam   = float(cfg.get("lambda", 1.0))
 
         # IC velocity weight (0.0 disables velocity IC)
         self.ic_v_weight = float(cfg.get("ic_v_weight", 1.0))
@@ -67,14 +69,16 @@ class Helmholtz2D(BaseExperiment):
 
     # -------- Analytic solution & forcing --------
     def u_star(self, x: torch.Tensor, y: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        return torch.sin(self.a1 * math.pi * x) * torch.sin(self.a2 * math.pi * y) * torch.cos(self.omega * t + self.phi)
+        return torch.sin(math.pi * x) * torch.sin(math.pi * y) * torch.exp(-self.lam * t)
 
     def ut_star(self, x: torch.Tensor, y: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        return -self.omega * torch.sin(self.a1 * math.pi * x) * torch.sin(self.a2 * math.pi * y) * torch.sin(self.omega * t + self.phi)
+        return -self.lam * torch.sin(math.pi * x) * torch.sin(math.pi * y) * torch.exp(-self.lam * t)
+    
+    def del2_u_star(self, x: torch.Tensor, y: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        return -2 * (math.pi ** 2) * self.u_star(x, y, t)
 
     def f(self, x: torch.Tensor, y: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        coeff = (-self.omega ** 2) + (self.c ** 2) * (self.a1 ** 2 + self.a2 ** 2) * (math.pi ** 2) + self.lam
-        return coeff * self.u_star(x, y, t)
+        return self.ut_star(x, y, t) - self.kappa * self.del2_u_star(x, y, t)
 
     # -------- Sampling (same as before) --------
     def sample_patches(self) -> Dict[str, torch.Tensor]:
@@ -194,9 +198,7 @@ class Helmholtz2D(BaseExperiment):
     # ======== Losses ========
     def pde_residual_loss(self, model, batch) -> torch.Tensor:
         """
-        Fully FD (central) residual on interior cells:
-        r = u_tt - c^2 (u_xx + u_yy) + λ u - f(x,y,t) = 0
-        No autograd on inputs; only standard backprop wrt params.
+        r = u_t - κ ∇²u - f(x,y,t)
         """
         dev = self.device
         P = batch["X_f"]
@@ -213,6 +215,7 @@ class Helmholtz2D(BaseExperiment):
 
         # central differences on interior
         C   = U[:, :, 1:-1, 1:-1, 1:-1]
+        Ut = (U[:, :, 2:,  1:-1, 1:-1] - U[:, :, :-2, 1:-1, 1:-1]) / (2.0 * self.dt)
         Uxx = (U[:, :, 1:-1, 1:-1, 2:]  - 2*C + U[:, :, 1:-1, 1:-1, :-2]) / (self.dx * self.dx)
         Uyy = (U[:, :, 1:-1, 2:,  1:-1] - 2*C + U[:, :, 1:-1, :-2, 1:-1]) / (self.dy * self.dy)
         Utt = (U[:, :, 2:,  1:-1, 1:-1] - 2*C + U[:, :, :-2, 1:-1, 1:-1]) / (self.dt * self.dt)
@@ -228,7 +231,7 @@ class Helmholtz2D(BaseExperiment):
         MBc = MB[:, :, 1:-1, 1:-1, 1:-1]
         MOK = (MVc * Mx * My * Mt) * (1.0 - MBc)  # float mask {0,1}
 
-        R = Utt - (self.c ** 2) * (Uxx + Uyy) + self.lam * C - Fc
+        R = Ut - self.kappa * (Uxx + Uyy + Utt) - Fc # u_t - κ ∇²u = f(x,y,t)
         R2 = (R * MOK) ** 2
 
         denom = torch.clamp(MOK.sum(), min=1.0)

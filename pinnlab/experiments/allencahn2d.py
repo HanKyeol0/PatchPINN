@@ -1,4 +1,4 @@
-# pinnlab/experiments/allencahn.py
+# pinnlab/experiments/allencahn2d.py
 import math, os, numpy as np
 import torch
 from typing import Dict
@@ -58,16 +58,12 @@ class AllenCahn2D(BaseExperiment):
         # IC velocity weight (0.0 disables velocity IC)
         self.ic_v_weight = float(cfg.get("ic_v_weight", 1.0))
 
-        # Choose derivative method
-        self.derivative_method = cfg.get("derivative_method", "finite_diff").lower()
-
         # Grid spacings for FD
         self.dx = (self.xb - self.xa) / max(1, self.gx - 1)
         self.dy = (self.yb - self.ya) / max(1, self.gy - 1)
         self.dt = (self.t1 - self.t0) / max(1, self.gt - 1)
 
         print(
-            f"[Helmholtz2D_patch] FD={self.derivative_method}, "
             f"dx={self.dx:.6g}, dy={self.dy:.6g}, dt={self.dt:.6g}; "
             f"patch={self.px}x{self.py}x{self.pt}, stride=({self.sx},{self.sy},{self.st})"
         )
