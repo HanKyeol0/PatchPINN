@@ -1,30 +1,9 @@
-# name: patch_ffn
-# in_features: 2
-# out_features: 1
-
-# # FFN architecture
-# hidden_dim: 128
-# num_layers: 6  # Total layers (including input and output)
-# activation: tanh  # tanh often works better for PINNs
-
-# patch:
-#   x: None  # Number of patches in x direction
-#   y: None  # Number of patches in y direction
-
-# # Fourier features for better position encoding
-# use_fourier_features: true
-# fourier_scale: 1.0
-
-# # Optional enhancements
-# use_residual: false  # Add residual connections
-# use_layer_norm: false  # Add layer normalization
-
 name: patch_ffn
 in_features: 2    # (x, y, t) for time-dependent problems
 out_features: 1
 
 # FFN architecture
-hidden_dim: 80
+hidden_dim: 64
 num_layers: 8     # Deeper network for time-dependent problems
 activation: tanh  # tanh often works better for PINNs
 

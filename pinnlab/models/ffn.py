@@ -54,6 +54,12 @@ class FFN(nn.Module):
         hidden_dim = cfg.get("hidden_dim", 128)
         num_layers = cfg.get("num_layers", 6)
         activation = cfg.get("activation", "tanh")
+
+        # Dropout
+        self.dropout_p = float(cfg.get("dropout", 0.0))
+        Drop = (lambda: nn.Dropout(self.dropout_p)) if self.dropout_p > 0.0 else (lambda: nn.Identity())
+        if self.dropout_p > 0:
+            print(f"[FFN] Using dropout p={self.dropout_p}")
         
         # Optional Fourier features
         use_fourier = cfg.get("use_fourier_features", True)
@@ -80,7 +86,9 @@ class FFN(nn.Module):
             for i in range(num_layers - 2):
                 layer = nn.Sequential(
                     nn.Linear(hidden_dim, hidden_dim),
-                    get_act(activation)
+                    get_act(activation),
+                    Drop()
+                    *( [nn.LayerNorm(hidden_dim)] if self.use_layer_norm else [] )
                 )
                 self.residual_layers.append(layer)
             # Output layer
@@ -90,6 +98,9 @@ class FFN(nn.Module):
             for _ in range(num_layers - 2):
                 layers.append(nn.Linear(hidden_dim, hidden_dim))
                 layers.append(get_act(activation))
+                layers.append(Drop())
+                if self.use_layer_norm:
+                    layers.append(nn.LayerNorm(hidden_dim))
             # Output layer
             layers.append(nn.Linear(hidden_dim, out_features))
             self.network = nn.Sequential(*layers)
@@ -128,13 +139,7 @@ class FFN(nn.Module):
             squeeze_output = False
         
         B, P, D = X.shape
-        
-        # Check if patch size matches expected (with tolerance for evaluation)
-        # if P != self.P:
-        #     # Only warn if significantly different (not just padding differences)
-        #     if abs(P - self.P) > self.P:
-        #         print(f"Warning: Expected {self.P} points, got {P} points")
-        
+
         # Flatten batch and points dimensions
         X_flat = X.reshape(B * P, D)  # [B*P, D]
         
