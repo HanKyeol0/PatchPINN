@@ -1,7 +1,7 @@
 seed: 42
-device: "cuda:2"
+device: "cuda:0"
 train:
-  epochs: 7000
+  epochs: 10000
   optimizer:
     name: adam
     lr: 5.0e-4  # Lower for stability with transformers
