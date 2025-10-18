@@ -1,0 +1,41 @@
+# 2D Burgers (manufactured forcing)
+in_features: 3
+out_features: 2
+
+domain:
+  x: [-1.0, 1.0]
+  y: [-1.0, 1.0]
+  t: [0.0, 1.0]
+
+# PDE/solution params
+nu: 0.01
+lambda: 2.0
+a1: 1.0
+a2: 1.0
+
+patch:
+  x: 5
+  y: 5
+  t: 3
+
+grid:
+  x: 60
+  y: 60
+  t: 20
+
+stride:
+  x: 1
+  y: 1
+  t: 1
+
+pad:
+  space: reflect
+  time: reflect
+
+bc_weights: {u: 1.0, v: 1.0}
+ic_weights: {u: 1.0, v: 1.0}
+
+video:
+  enabled: true
+  fps: 10
+  format: mp4

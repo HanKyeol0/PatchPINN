@@ -239,7 +239,7 @@ def main(args):
 
         global_step += 1
 
-    global_step -= 1  # last increment was extra
+    global_step += 1  # final step increment
     training_end_time = time.time()
 
     final_perf = {
@@ -255,7 +255,6 @@ def main(args):
         out_fmt  = exp_cfg.get("video", {}).get("format", "mp4")  # "mp4" or "gif"
         vid_path = exp.make_video(
             model, vid_grid, out_dir,
-            filename=f"evolution.{out_fmt}",
             nt_video=nt_video, fps=fps,
         )
         wandb_log({"video/evolution": wandb.Video(vid_path, format=out_fmt)}, step=global_step)
@@ -279,7 +278,6 @@ def main(args):
 
     # Final evaluation & plots
     model.eval()
-    global_step -= 1
     figs = exp.plot_final(model, base_cfg["eval"]["grid"], out_dir)
     for name, path in figs.items():
         wandb_log({f"fig/{name}": wandb.Image(path)}, step=global_step)

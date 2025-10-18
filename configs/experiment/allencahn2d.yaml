@@ -33,6 +33,10 @@ omega: 2.0     # temporal frequency
 
 derivative_method: finite_diff # autograd, finite_diff
 
+# Boundary condition
+bc_type: dirichlet # dirichlet, analytic (not implemented "periodic", "neumann", .. yet)  
+bc_value: 0.0
+
 # Training
 batch_size: 32   # number of patches per batch
 

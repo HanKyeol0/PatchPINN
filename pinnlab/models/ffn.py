@@ -78,6 +78,13 @@ class FFN(nn.Module):
         # Input layer
         layers.append(nn.Linear(input_dim, hidden_dim))
         layers.append(get_act(activation))
+
+        # Optional: Layer normalization for stability
+        self.use_layer_norm = cfg.get("use_layer_norm", False)
+        if self.use_layer_norm:
+            self.norm_layers = nn.ModuleList([
+                nn.LayerNorm(hidden_dim) for _ in range(num_layers - 1)
+            ])
         
         # Hidden layers with optional residual connections
         self.use_residual = cfg.get("use_residual", False)
@@ -104,13 +111,6 @@ class FFN(nn.Module):
             # Output layer
             layers.append(nn.Linear(hidden_dim, out_features))
             self.network = nn.Sequential(*layers)
-        
-        # Optional: Layer normalization for stability
-        self.use_layer_norm = cfg.get("use_layer_norm", False)
-        if self.use_layer_norm:
-            self.norm_layers = nn.ModuleList([
-                nn.LayerNorm(hidden_dim) for _ in range(num_layers - 1)
-            ])
         
         # Initialize weights
         self.apply(self._init_weights)

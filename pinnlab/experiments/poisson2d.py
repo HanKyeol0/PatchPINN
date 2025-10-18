@@ -54,6 +54,10 @@ class Poisson2D(BaseExperiment):
         self.kappa = float(cfg.get("kappa", 1.0))
         self.lam   = float(cfg.get("lambda", 1.0))
 
+        # Boundary conditions
+        self.bc_type = float(cfg.get("bc_type", "dirichlet"))
+        self.bc_value = float(cfg.get("bc_value", 0.0))
+
         # IC velocity weight (0.0 disables velocity IC)
         self.ic_v_weight = float(cfg.get("ic_v_weight", 1.0))
 
@@ -248,7 +252,10 @@ class Poisson2D(BaseExperiment):
             return torch.tensor(0.0, device=dev, requires_grad=True)
         X = coords.reshape(-1, 3)[keep]
         U = model(X); U = U.view(-1, 1) if U.dim() == 1 else U[..., :1]
-        U_ref = self.u_star(X[:, 0], X[:, 1], X[:, 2]).unsqueeze(-1)
+        if self.bc_type == "dirichlet":
+            U_ref = torch.full_like(U, self.bc_value, device=dev, dtype=U.dtype)
+        elif self.bc_type == "analytic":
+            U_ref = self.u_star(X[:, 0], X[:, 1], X[:, 2]).unsqueeze(-1)
         return ((U - U_ref) ** 2).mean()
 
     def initial_loss(self, model, batch) -> torch.Tensor:

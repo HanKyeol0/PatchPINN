@@ -12,6 +12,7 @@ from pinnlab.experiments.helmholtz2d import Helmholtz2D
 from pinnlab.experiments.allencahn2d import AllenCahn2D
 from pinnlab.experiments.poisson2d import Poisson2D
 from pinnlab.experiments.navierstokes2d import NavierStokes2D
+from pinnlab.experiments.burgers2d import Burgers2D
 
 _MODEL_REG = {
     "ffn": FFN,
@@ -29,11 +30,7 @@ _EXP_REG = {
     "allencahn2d": AllenCahn2D,
     "poisson2d": Poisson2D,
     "navierstokes2d": NavierStokes2D,
-    # "burgers1d": Burgers1D,
-    # "convection1d": Convection1D,
-    # "reactiondiffusion1d": ReactionDiffusion1D,
-    # "reactiondiffusion2d": ReactionDiffusion2D,
-    # "allencahn1d": AllenCahn1D,
+    "burgers2d": Burgers2D,
 }
 
 def get_model(name):     return _MODEL_REG[name]
