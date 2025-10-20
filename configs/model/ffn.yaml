@@ -4,8 +4,9 @@ out_features: 1
 
 # FFN architecture
 hidden_dim: 64
-num_layers: 8     # Deeper network for time-dependent problems
+num_layers: 6     # Deeper network for time-dependent problems
 activation: tanh  # tanh often works better for PINNs
+dropout: 0
 
 # Patch dimensions must match experiment config
 patch:

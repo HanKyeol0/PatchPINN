@@ -55,6 +55,10 @@ class AllenCahn2D(BaseExperiment):
         self.eps  = float(cfg.get("eps", 0.01))
         self.omega= float(cfg.get("omega", 2.0))
 
+        # Boundary condition
+        self.bc_type = cfg.get("bc_type", "dirichlet")  # "dirichlet" or "analytic" ("periodic" not implemented yet)
+        self.bc_value = cfg.get("bc_value", 0.0)  # used only if bc_type=="dirichlet"
+
         # IC velocity weight (0.0 disables velocity IC)
         self.ic_v_weight = float(cfg.get("ic_v_weight", 1.0))
 

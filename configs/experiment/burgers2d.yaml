@@ -5,7 +5,7 @@ out_features: 2
 domain:
   x: [-1.0, 1.0]
   y: [-1.0, 1.0]
-  t: [0.0, 1.0]
+  t: [0.0, 2.0]
 
 # PDE/solution params
 nu: 0.01
@@ -14,14 +14,14 @@ a1: 1.0
 a2: 1.0
 
 patch:
-  x: 5
-  y: 5
+  x: 7
+  y: 7
   t: 3
 
 grid:
   x: 60
   y: 60
-  t: 20
+  t: 30
 
 stride:
   x: 1
