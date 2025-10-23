@@ -1,5 +1,5 @@
 seed: 42
-device: "cuda:0"
+device: "cuda:1"
 train:
   epochs: 30000
   optimizer:

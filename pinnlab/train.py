@@ -249,8 +249,8 @@ def main(args):
     }
 
     if exp_cfg.get("video", {}).get("enabled", False):
-        vid_grid = exp_cfg.get("video", {}).get("grid", {"x": 128, "y": 128})
-        nt_video = exp_cfg.get("video", {}).get("nt", 60)
+        vid_grid = exp_cfg.get("video", {}).get("grid", {})
+        nt_video = exp_cfg.get("video", {}).get("nt", 0)
         fps      = exp_cfg.get("video", {}).get("fps", 10)
         out_fmt  = exp_cfg.get("video", {}).get("format", "mp4")  # "mp4" or "gif"
         vid_path = exp.make_video(

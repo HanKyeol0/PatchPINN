@@ -6,8 +6,8 @@ domain:
 
 # Patch configuration
 patch:
-  x: 7   # points per patch in x
-  y: 7   # points per patch in y
+  x: 5   # points per patch in x
+  y: 5   # points per patch in y
   t: 3   # points per patch in time
 
 # Grid configuration (total points)
@@ -29,8 +29,8 @@ pad_mode:
 
 # PDE parameters
 nu: 0.02 # Kinematic viscosity. When it's big, flow is laminar; when small, flow is turbulent.
-a1: 2.0
-a2: 2.0
+a1: 1.5
+a2: 1.5
 div_weight: 1.0 # Weight for divergence-free condition
 
 # Training

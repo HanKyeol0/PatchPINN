@@ -6,9 +6,9 @@ domain:
 
 # Patch configuration
 patch:
-  x: 8   # points per patch in x
-  y: 8   # points per patch in y
-  t: 3   # points per patch in time
+  x: 3   # points per patch in x
+  y: 3   # points per patch in y
+  t: 1   # points per patch in time
 
 # Grid configuration (total points)
 grid:
@@ -48,6 +48,8 @@ out_features: 1  # u(x, y, t)
 
 # Video generation settings
 video:
+  grid: {x: 60, y: 60}
+  nt: 20
   enabled: true
   fps: 10
   format: mp4

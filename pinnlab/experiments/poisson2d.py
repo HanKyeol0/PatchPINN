@@ -55,7 +55,7 @@ class Poisson2D(BaseExperiment):
         self.lam   = float(cfg.get("lambda", 1.0))
 
         # Boundary conditions
-        self.bc_type = float(cfg.get("bc_type", "dirichlet"))
+        self.bc_type = cfg.get("bc_type", "dirichlet")
         self.bc_value = float(cfg.get("bc_value", 0.0))
 
         # IC velocity weight (0.0 disables velocity IC)

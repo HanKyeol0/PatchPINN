@@ -6,8 +6,8 @@ domain:
 
 # Patch configuration
 patch:
-  x: 1   # points per patch in x
-  y: 1   # points per patch in y
+  x: 6   # points per patch in x
+  y: 6   # points per patch in y
   t: 3   # points per patch in time
 
 # Grid configuration (total points)
