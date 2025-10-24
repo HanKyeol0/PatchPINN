@@ -5,17 +5,4 @@ scripts/ffn/poisson2d.sh
 scripts/ffn/navierstokes2d.sh
 scripts/ffn/burgers2d.sh
 
-scripts/residual_ffn/helmholtz2d_steady.sh
-scripts/residual_ffn/helmholtz2d.sh
-
-scripts/ffn_context/helmholtz2d_steady.sh
-
-scripts/cnn/helmholtz2d_steady.sh
-
-scripts/simple_cnn/helmholtz2d_steady.sh
-
-scripts/hybrid_cnn/helmholtz2d_steady.sh
-
-scripts/unet/helmholtz2d_steady.sh
-
-scripts/ffn_hard_bc/helmholtz2d_steady.sh
+scripts/load_model_exp.sh

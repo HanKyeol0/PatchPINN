@@ -194,109 +194,28 @@ class Helmholtz2D(BaseExperiment):
         if U.shape[-1] != 1:
             U = U[..., :1]
         return U  # [N,1]
-    
-    def _safe_interior_mask(self, coords: torch.Tensor) -> torch.Tensor:
-        """
-        Mark centers that are at least 1 grid step away from each global boundary
-        so that central differences (±dx, ±dy, ±dt) stay in-domain.
-        coords: [B, N, 3]
-        """
-        x, y, t = coords[..., 0], coords[..., 1], coords[..., 2]
-        # integer indices on the global grid
-        ix = torch.round((x - self.xa) / self.dx)
-        iy = torch.round((y - self.ya) / self.dy)
-        it = torch.round((t - self.t0) / self.dt)
-        # need indices in [1, G-2] for central stencil
-        mask = (
-            (ix >= 1) & (ix <= (self.gx - 2)) &
-            (iy >= 1) & (iy <= (self.gy - 2)) &
-            (it >= 1) & (it <= (self.gt - 2))
-        )
-        return mask
-    
-    def _pde_residual_via_queries(self, model, P: Dict[str, torch.Tensor]) -> torch.Tensor:
-        """
-        Central FD using on-the-fly model queries at ±dx, ±dy, ±dt around each retained center.
-        Works even when px/py/pt < 3 (no interior cells exist inside a patch).
-        """
-        dev = self.device
-        coords = P["coords"].to(dev)   # [B, N, 3]
-        valid  = P["valid"].to(dev)    # [B, N]
-        is_bnd = P["is_bnd"].to(dev)   # [B, N]
-
-        if coords.numel() == 0:
-            return torch.tensor(0.0, device=dev, requires_grad=True)
-
-        # keep only interior (not domain boundary, has neighbors one step away)
-        keep_mask = (valid > 0.5) & (~(is_bnd > 0.5)) & self._safe_interior_mask(coords)
-        if not torch.any(keep_mask):
-            return torch.tensor(0.0, device=dev, requires_grad=True)
-
-        C = coords[keep_mask]          # [M, 3]
-        M = C.shape[0]
-        if M == 0:
-            return torch.tensor(0.0, device=dev, requires_grad=True)
-
-        # neighbor offsets
-        ex = torch.tensor([self.dx, 0.0, 0.0], device=dev).view(1, 1, 3)
-        ey = torch.tensor([0.0, self.dy, 0.0], device=dev).view(1, 1, 3)
-        et = torch.tensor([0.0, 0.0, self.dt], device=dev).view(1, 1, 3)
-
-        C_ = C.view(M, 1, 3)
-        neigh = torch.cat([
-            C_,                     # 0: center
-            C_ + ex, C_ - ex,      # 1: +x, 2: -x
-            C_ + ey, C_ - ey,      # 3: +y, 4: -y
-            C_ + et, C_ - et,      # 5: +t, 6: -t
-        ], dim=1).reshape(-1, 3)   # [M*7, 3]
-
-        # One forward pass for all needed points (no AD on inputs)
-        U_all = model(neigh)                   # [M*7, 1] or [M*7]
-        if U_all.dim() == 1:
-            U_all = U_all[:, None]
-        U_all = U_all[:, :1]                   # ensure scalar field
-        U_all = U_all.view(M, 7, 1)            # [M, 7, 1]
-
-        Uc   = U_all[:, 0, 0]                  # center
-        Uxp  = U_all[:, 1, 0]; Uxm = U_all[:, 2, 0]
-        Uyp  = U_all[:, 3, 0]; Uym = U_all[:, 4, 0]
-        Utp  = U_all[:, 5, 0]; Utm = U_all[:, 6, 0]
-
-        # Central second derivatives
-        Uxx = (Uxp - 2*Uc + Uxm) / (self.dx * self.dx)
-        Uyy = (Uyp - 2*Uc + Uym) / (self.dy * self.dy)
-        Utt = (Utp - 2*Uc + Utm) / (self.dt * self.dt)
-
-        # Forcing at centers
-        fx = self.f(C[:, 0], C[:, 1], C[:, 2])
-
-        # Residual: u_tt - c^2 (u_xx + u_yy) + λ u - f = 0
-        R = Utt - (self.c ** 2) * (Uxx + Uyy) + self.lam * Uc - fx
-
-        return (R ** 2).mean()
 
     # ======== Losses ========
     def pde_residual_loss(self, model, batch) -> torch.Tensor:
         """
-        If every patch axis >= 3, use the original packed-cube central FD (fast).
-        Otherwise, fall back to the virtual-halo query method that works for tiny patches.
+        Fully FD (central) residual on interior cells:
+        r = u_tt - c^2 (u_xx + u_yy) + λ u - f(x,y,t) = 0
+        No autograd on inputs; only standard backprop wrt params.
         """
-        small = (self.px < 3) or (self.py < 3) or (self.pt < 3)
-        if small:
-            return self._pde_residual_via_queries(model, batch["X_f"])
-        # --- original path (unchanged) ---
         dev = self.device
         P = batch["X_f"]
-        coords = P["coords"].to(dev)      # [B, N, 3]
+        coords = P["coords"].to(dev)      # [B, N, 3] with B=L*Nt
         valid  = P["valid"].to(dev)       # [B, N]
         is_bnd = P["is_bnd"].to(dev)      # [B, N]
 
         if coords.numel() == 0:
             return torch.tensor(0.0, device=dev, requires_grad=True)
 
+        # Predict once for the whole batch
         U_pred = model(coords.reshape(-1, 3)).reshape(coords.shape[0], coords.shape[1])
         U, MV, MB, X, Y, T = self._pack_to_cubes(coords, valid, is_bnd, U_pred)
 
+        # central differences on interior
         C   = U[:, :, 1:-1, 1:-1, 1:-1]
         Uxx = (U[:, :, 1:-1, 1:-1, 2:]  - 2*C + U[:, :, 1:-1, 1:-1, :-2]) / (self.dx * self.dx)
         Uyy = (U[:, :, 1:-1, 2:,  1:-1] - 2*C + U[:, :, 1:-1, :-2, 1:-1]) / (self.dy * self.dy)
@@ -305,15 +224,17 @@ class Helmholtz2D(BaseExperiment):
         Xc, Yc, Tc = X[:, :, 1:-1, 1:-1, 1:-1], Y[:, :, 1:-1, 1:-1, 1:-1], T[:, :, 1:-1, 1:-1, 1:-1]
         Fc = self.f(Xc.squeeze(1), Yc.squeeze(1), Tc.squeeze(1)).unsqueeze(1)
 
+        # validity: center & 6 neighbors valid, and center is not spatial boundary
         MVc = MV[:, :, 1:-1, 1:-1, 1:-1]
         Mx  = MV[:, :, 1:-1, 1:-1, 2:] * MV[:, :, 1:-1, 1:-1, :-2]
         My  = MV[:, :, 1:-1, 2:,  1:-1] * MV[:, :, 1:-1, :-2, 1:-1]
         Mt  = MV[:, :, 2:,  1:-1, 1:-1] * MV[:, :, :-2, 1:-1, 1:-1]
         MBc = MB[:, :, 1:-1, 1:-1, 1:-1]
-        MOK = (MVc * Mx * My * Mt) * (1.0 - MBc)
+        MOK = (MVc * Mx * My * Mt) * (1.0 - MBc)  # float mask {0,1}
 
         R = Utt - (self.c ** 2) * (Uxx + Uyy) + self.lam * C - Fc
         R2 = (R * MOK) ** 2
+
         denom = torch.clamp(MOK.sum(), min=1.0)
         return R2.sum() / denom
 

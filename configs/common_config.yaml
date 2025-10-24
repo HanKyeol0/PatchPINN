@@ -1,5 +1,5 @@
 seed: 42
-device: "cuda:1"
+device: "cuda:0"
 train:
   epochs: 30000
   optimizer:
@@ -26,7 +26,7 @@ log:
   out_dir: "outputs"
   wandb:
     enabled: true
-    project: "pinnlab_patch"
+    project: "patchpinn_helmholtz2d"
     entity: null
     mode: "online"
 eval:

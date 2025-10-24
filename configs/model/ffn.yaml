@@ -1,4 +1,4 @@
-name: patch_ffn
+name: ffn
 in_features: 2    # (x, y, t) for time-dependent problems
 out_features: 1
 
