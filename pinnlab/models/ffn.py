@@ -5,7 +5,7 @@ from .activation import get_act
 
 class FourierFeatures(nn.Module):
     """Random Fourier features for better position encoding."""
-    def __init__(self, in_features=2, out_features=128, scale=1.0):
+    def __init__(self, in_features: int, out_features: int = 128, scale=1.0):
         super().__init__()
         self.register_buffer('B', torch.randn(in_features, out_features // 2) * scale)
         
@@ -36,24 +36,24 @@ class FFN(nn.Module):
         if in_features == 2:
             # 2D steady-state problem
             self.pt = 1
-            self.P = self.px * self.py
-            print(f"FFN (2D): {self.px}x{self.py} = {self.P} points per patch")
+            print(f"FFN (2D): {self.px}x{self.py}")
         elif in_features == 3:
             # 3D time-dependent problem
             self.pt = int(patch.get("t", 3))  # Default to 3 for time dimension
-            self.P = self.px * self.py * self.pt
-            print(f"FFN (3D): {self.px}x{self.py}x{self.pt} = {self.P} points per patch")
+            print(f"FFN (3D): {self.px}x{self.py}x{self.pt}")
         else:
             # General case
             self.pt = int(patch.get("t", 1))
-            self.P = self.px * self.py * self.pt
-            print(f"FFN: {in_features}D input, {self.P} points per patch")
+            print(f"FFN: in_features={self.in_features}, patch=({self.px},{self.py},{self.pt})")
+            
+        self.P = self.px * self.py * self.pt
+        print(f"[FFN] Points per patch P = {self.P}")
         
         # Network configuration
         out_features = cfg.get("out_features", 1)
         hidden_dim = cfg.get("hidden_dim", 128)
         num_layers = cfg.get("num_layers", 6)
-        activation = cfg.get("activation", "tanh")
+        activation = get_act(cfg.get("activation", "tanh"))
 
         # Dropout
         self.dropout_p = float(cfg.get("dropout", 0.0))
@@ -122,7 +122,7 @@ class FFN(nn.Module):
             if m.bias is not None:
                 nn.init.zeros_(m.bias)
     
-    def forward(self, X: torch.Tensor) -> torch.Tensor:
+    def forward(self, X: torch.Tensor, ep=None) -> torch.Tensor:
         """
         Args:
             X: [P, in_features] or [B, P, in_features]
@@ -133,12 +133,21 @@ class FFN(nn.Module):
         # Handle both 2D and 3D inputs
         if X.dim() == 2:
             # [P, in_features] -> [1, P, in_features]
+            if ep==0:
+                print("X shape1:", X.shape)
             X = X.unsqueeze(0)
+            if ep==0:
+                print("X shape2:", X.shape)
             squeeze_output = True
         else:
             squeeze_output = False
         
         B, P, D = X.shape
+        
+        if ep==0:
+            print("Batch size:", B)
+            print("Points per patch:", P)
+            print("Input feature dim:", D)
 
         # Flatten batch and points dimensions
         X_flat = X.reshape(B * P, D)  # [B*P, D]

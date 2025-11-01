@@ -35,6 +35,12 @@ def main(args):
     model_cfg["patch"]["y"] = exp_cfg.get("patch", {}).get("y", None)
     model_cfg["patch"]["t"] = exp_cfg.get("patch", {}).get("t", None)
 
+    microbatches       = int(base_cfg["train"].get("microbatches", 16))
+    patches_per_batch  = int(base_cfg["train"].get("patches_per_batch", 32))  # number of patches per micro-step
+    
+    accumulate_steps   = int(base_cfg["train"].get("accumulate_steps", 1))
+    assert accumulate_steps >= 1
+    
     seed_everything(base_cfg["seed"])
 
     if exp_cfg.get("device"):
@@ -47,12 +53,12 @@ def main(args):
     if tag:
         file_name = f"{args.experiment_name}_{args.model_name}_{tag}"
     else:
+        ts = time.strftime("%Y%m%d-%H%M%S")
         file_name = f"{args.experiment_name}_{args.model_name}_{ts}"
 
     torch.cuda.reset_peak_memory_stats(device)
 
     # Logging dir
-    ts = time.strftime("%Y%m%d-%H%M%S")
     out_dir = os.path.join(base_cfg["log"]["out_dir"], args.experiment_name, file_name)
     os.makedirs(out_dir, exist_ok=True)
 
@@ -103,15 +109,18 @@ def main(args):
         })
 
     # gradient flow logger
-    gf = GradientFlowLogger(
-        model, out_dir,
-        enable=base_cfg.get("gradflow", {}).get("enabled", True),
-        every=int(base_cfg.get("gradflow", {}).get("every", 1000)),
-        store_vectors=bool(base_cfg.get("gradflow", {}).get("store_vectors", False)),
-        max_keep_per_layer=int(base_cfg.get("gradflow", {}).get("max_keep", 20)),
-        wandb_hist=bool(base_cfg.get("gradflow", {}).get("wandb_hist", False)),
-        plot_cfg=base_cfg.get("gradflow", {}).get("plot", {})
-    )
+    use_gradflow = base_cfg["gradflow"]["enabled"]
+    if use_gradflow:
+        gf = GradientFlowLogger(
+            model, out_dir,
+            enable=base_cfg.get("gradflow", {}).get("enabled", True),
+            every=int(base_cfg.get("gradflow", {}).get("every", 1000)),
+            store_vectors=bool(base_cfg.get("gradflow", {}).get("store_vectors", False)),
+            max_keep_per_layer=int(base_cfg.get("gradflow", {}).get("max_keep", 20)),
+            wandb_hist=bool(base_cfg.get("gradflow", {}).get("wandb_hist", False)),
+            plot_cfg=base_cfg.get("gradflow", {}).get("plot", {})
+        )
+        gf_stop = base_cfg["gradflow"]["stop_at"]
 
     epochs = base_cfg["train"]["epochs"]
     eval_every = int(base_cfg.get("eval").get("every", 100))
@@ -136,9 +145,6 @@ def main(args):
         leave=False,          # don't leave old bars behind
         disable=not use_tty,  # if output is piped, avoid multiline spam
     )
-    gf_stop = base_cfg["gradflow"]["stop_at"]
-
-    patches = exp.sample_batch() # {"X_f": x_f, "X_b": x_b, "u_b": u_b}
 
     print("training started")
     global_step = 1
@@ -151,103 +157,97 @@ def main(args):
 
     for ep in pbar:
         model.train()
+        
+        exp.prepare_epoch_patch_bank()
 
-        with torch.cuda.amp.autocast(dtype=torch.float16):
-            loss_res = exp.pde_residual_loss(model, patches).mean() if patches.get("X_f") is not None else torch.tensor(0., device=device)
-            loss_bc = exp.boundary_loss(model, patches).mean()     if patches.get("X_b") is not None else torch.tensor(0., device=device)
-            loss_ic = exp.initial_loss(model, patches).mean()      if patches.get("X_0") is not None else torch.tensor(0., device=device)
+        running = {"res": 0.0, "bc": 0.0, "ic": 0.0, "total": 0.0}
+        
+        for mb in range(microbatches):
+            # ---- fetch a small subset of patches
+            patches = exp.sample_minibatch(patches_per_batch, shuffle=True)
 
-        loss_res_s = loss_res.mean() if torch.is_tensor(loss_res) and loss_res.dim() > 0 else loss_res # scalar
-        loss_bc_s = loss_bc.mean() if torch.is_tensor(loss_bc) and loss_bc.dim() > 0 else loss_bc
-        loss_ic_s = loss_ic.mean() if torch.is_tensor(loss_ic) and loss_ic.dim() > 0 else loss_ic
+            # ---- compute losses on the minibatch
+            loss_res = exp.pde_residual_loss(model, patches, ep)
+            loss_bc  = exp.boundary_loss(model, patches)
+            loss_ic  = exp.initial_loss(model, patches)
 
-        if ep <= gf_stop:
-            gf.collect({"res": loss_res_s, "bc": loss_bc_s, "ic": loss_ic_s}, step=global_step)
+            # scalarize
+            loss_res_s = loss_res.mean() if torch.is_tensor(loss_res) and loss_res.dim() > 0 else loss_res
+            loss_bc_s  = loss_bc.mean()  if torch.is_tensor(loss_bc)  and loss_bc.dim()  > 0 else loss_bc
+            loss_ic_s  = loss_ic.mean()  if torch.is_tensor(loss_ic)  and loss_ic.dim()  > 0 else loss_ic
 
-        losses = {
-            "res": loss_res_s,     # PDE residual term
-            **({"bc": loss_bc} if "loss_bc" in locals() else {}),
-            **({"ic": loss_ic} if "loss_ic" in locals() else {}),
-            # **({"data": loss_data} if "loss_data" in locals() else {}),
-        }
+            if use_gradflow and global_step % gf.every == 0:
+                if ep <= gf_stop:
+                    gf.collect({"res": loss_res_s, "bc": loss_bc_s, "ic": loss_ic_s}, step=global_step)
 
-        if not use_loss_balancer:
-            total_loss = w_res*loss_res + w_bc*loss_bc + w_ic*loss_ic
-            s = (w_res + w_bc + w_ic) or 1.0
-            w_now = {"res": w_res/s, "bc": w_bc/s, "ic": w_ic/s}
-        else:
-            total_loss, w_dict, aux = balancer(losses, step=global_step, model=model)
-            w_now = {k.split("/", 1)[1]: float(v) for k, v in w_dict.items()}
+            losses = {"res": loss_res_s, "bc": loss_bc_s, "ic": loss_ic_s}
 
-        # write one row per epoch/step
-        _ensure_weights_header(w_now.keys())
-        with open(weights_csv, "a", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow([global_step] + [w_now[t] for t in weights_terms])
+            if not use_loss_balancer:
+                total_loss = w_res*loss_res_s + w_bc*loss_bc_s + w_ic*loss_ic_s
+                s = (w_res + w_bc + w_ic) or 1.0
+                w_now = {"res": w_res/s, "bc": w_bc/s, "ic": w_ic/s}
+            else:
+                total_loss, w_dict, aux = balancer(losses, step=global_step, model=model)
+                w_now = {k.split("/", 1)[1]: float(v) for k, v in w_dict.items()}
 
-        optimizer.zero_grad(set_to_none=True)
-        total_loss.backward()
-        optimizer.step()
+            # write weights row on first microbatch of the epoch (keeps CSV compact)
+            if mb == 0:
+                _ensure_weights_header(w_now.keys())
+                with open(weights_csv, "a", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow([global_step] + [w_now[t] for t in weights_terms])
 
-        torch.cuda.synchronize(device)
+            # ---- backward / step (with optional accumulation)
+            (total_loss / accumulate_steps).backward()
+            if (mb + 1) % accumulate_steps == 0:
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
 
-        it_per_sec = pbar.format_dict.get("rate", None)         # float or None
-        elapsed_s  = pbar.format_dict.get("elapsed", None)      # seconds (float)
+            # accumulate stats
+            running["res"]   += float(loss_res_s.detach().cpu())
+            running["bc"]    += float(loss_bc_s.detach().cpu())
+            running["ic"]    += float(loss_ic_s.detach().cpu())
+            running["total"] += float(total_loss.detach().cpu())
 
-        gpu_now = {
-            "gpu/mem_alloc_mb": float(torch.cuda.memory_allocated(device)) / (1024**2),
-            "gpu/mem_reserved_mb": float(torch.cuda.memory_reserved(device)) / (1024**2),
-        }
+            # per-microbatch logging
+            it_per_sec = pbar.format_dict.get("rate", None)
+            elapsed_s  = pbar.format_dict.get("elapsed", None)
+            gpu_now = {
+                "gpu/mem_alloc_mb": float(torch.cuda.memory_allocated(device)) / (1024**2),
+                "gpu/mem_reserved_mb": float(torch.cuda.memory_reserved(device)) / (1024**2),
+            }
+            log_payload = {
+                "loss/total": float(total_loss.detach().cpu()),
+                "loss/res": float(loss_res_s.detach().cpu()),
+                "loss/bc": float(loss_bc_s.detach().cpu()),
+                "loss/ic": float(loss_ic_s.detach().cpu()),
+                "lr": optimizer.param_groups[0]["lr"],
+                "epoch": ep,
+                "perf/it_per_sec_tqdm": it_per_sec if it_per_sec is not None else 0.0,
+                "perf/elapsed_sec": elapsed_s if elapsed_s is not None else 0.0,
+                **gpu_now,
+            }
+            wandb_log(log_payload, step=global_step, commit=True)
+            pbar.set_postfix({k: f"{v:.3e}" for k, v in log_payload.items() if "loss" in k})
 
-        # Log
-        log_dict = {
-            "loss/total": total_loss.item(),
-            "loss/res": loss_res.item(),
-            "loss/bc": loss_bc.item(),
-            "loss/ic": loss_ic.item(),
-            "lr": optimizer.param_groups[0]["lr"],
-            "epoch": ep
-        }
-
-        log_payload = {"loss/total": float(total_loss.detach().cpu())}
-        # log_payload.update(w_dict)
-        # log_payload.update(aux)        # e.g., sigma values for uncertainty scheme
-        for k, v in losses.items():
-            log_payload[f"loss/{k}"] = float(v.detach().cpu())
-
-        # Combine all metrics
-        all_metrics = {**log_dict, **log_payload}
-
-        all_metrics.update({
-            "perf/it_per_sec_tqdm": it_per_sec if it_per_sec is not None else 0.0,
-            "perf/elapsed_sec": elapsed_s if elapsed_s is not None else 0.0,
-            **gpu_now,
-        })
-
+            global_step += 1
+            
         # Simple validation metric (relative L2 on a fixed grid)
         best_path = os.path.join(out_dir, "best.pt")
-        if ep % eval_every == 0 or ep == epochs-1:
+        if (ep % eval_every == 0) or (ep == epochs - 1):
             with torch.no_grad():
                 rel_l2 = exp.relative_l2_on_grid(model, base_cfg["eval"]["grid"])
-            all_metrics["eval/rel_l2"] = rel_l2
+            wandb_log({"eval/rel_l2": rel_l2, "epoch": ep}, step=global_step)
 
+            best_path = os.path.join(out_dir, "best.pt")
             if rel_l2 < (best_metric - es_cfg.get("min_delta", 0.0)):
                 best_metric = rel_l2
-                best_state = {k: v.clone() for k,v in model.state_dict().items()}
-                torch.save({k:v.detach().cpu() for k,v in best_state.items()}, best_path)
-
+                best_state = {k: v.clone() for k, v in model.state_dict().items()}
+                torch.save({k: v.detach().cpu() for k, v in best_state.items()}, best_path)
             if early and early.step(rel_l2):
                 print(f"\n[EarlyStopping] Stopping at epoch {ep}. Best rel_l2={best_metric:.3e}")
                 break
-
-        # Log everything for this step at once
-        wandb_log(all_metrics, step=global_step, commit=True)
-        pbar.set_postfix({**{k: f"{v:.3e}" for k,v in all_metrics.items() if "loss" in k},
-                        "it/s": f"{(it_per_sec or 0.0):.2f}"})
-
-        global_step += 1
-
-    global_step += 1  # final step increment
+            
     training_end_time = time.time()
 
     final_perf = {
@@ -274,11 +274,12 @@ def main(args):
     print(f"[weights] saved: {weights_csv}")
     print(f"[weights] plot : {weights_png}")
 
-    gf.save()
-    if gf.plot_enabled:
-        saved = gf.save_plots()
-        for p in saved:
-            print(f"[gradflow] saved plot: {p}")
+    if use_gradflow:
+        gf.save()
+        if gf.plot_enabled:
+            saved = gf.save_plots()
+            for p in saved:
+                print(f"[gradflow] saved plot: {p}")
 
     # Restore best
     if best_state:
