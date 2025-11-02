@@ -15,9 +15,10 @@ def _build_xy_grid(xa, xb, ya, yb, nx, ny, device):
     return img, mask, (x, y)
 
 def _pad2d(t, pad_hw, mode, value=0.0):
+    _, _, ny, nx = t.shape
     # pad order for F.pad on 4D [N,C,H,W] is (W_left, W_right, H_top, H_bottom)
     (pw0, pw1), (ph0, ph1) = pad_hw
-    if mode == "zero":
+    if mode == "extend":
         return F.pad(t, (pw0, pw1, ph0, ph1), mode="constant", value=value)
     if mode in ("reflect", "replicate", "circular"):
         return F.pad(t, (pw0, pw1, ph0, ph1), mode=mode)
@@ -40,39 +41,32 @@ def extract_xy_patches(
       is_bnd: [L, P]     (1 if that point is on domain boundary)
       meta:   dict with strides/sizes
     """
+    # pad_xa = xa - (xb-xa)/(nx-1)
+    # pad_xb = xb + (xb-xa)/(nx-1)
+    # pad_ya = ya - (yb-ya)/(ny-1)
+    # pad_yb = yb + (yb-ya)/(ny-1)
+    # img, mask, (xv, yv) = _build_xy_grid(pad_xa, pad_xb, pad_ya, pad_yb, nx+2, ny+2, device) # with 1-cell pad
     img, mask, (xv, yv) = _build_xy_grid(xa, xb, ya, yb, nx, ny, device)
-    # padding (so boundary points can appear centered if desired)
-    ph0 = (ky - 1) // 2
-    ph1 = ky - 1 - ph0
-    pw0 = (kx - 1) // 2
-    pw1 = kx - 1 - pw0
-    pad_hw = ((pw0, pw1), (ph0, ph1))
-
-    pad_mode_eff = {"constant": "zero"}.get(pad_mode, pad_mode)
-    img_p  = _pad2d(img,  pad_hw, pad_mode_eff, value=0.0)
-    if pad_mode_eff == "circular":
-        mask_p = _pad2d(mask, pad_hw, "circular"); mask_p[:] = 1.0
-    else:
-        mask_p = _pad2d(mask, pad_hw, "zero", value=0.0)
 
     unfold = torch.nn.Unfold(kernel_size=(ky, kx), stride=(sy, sx))
 
-    # Unfold coordinates: [1, 2*P, L] -> [L, 2*P]
-    patches_xy = unfold(img_p).squeeze(0).transpose(0, 1).contiguous()
+    # Unfold coordinates: [1, 2*P, L] -> [L, 2*P] # L means number of patches, and P = kx*ky
+    patches_xy = unfold(img).squeeze(0).transpose(0, 1).contiguous() # [L, 2*P] (L patches, P=kx*ky)
+
     P = kx * ky
     L = patches_xy.shape[0]
     # Split channels: first P are X, next P are Y, then stack to [L, P, 2]
     xs = patches_xy[:, :P]
     ys = patches_xy[:, P:]
-    coords = torch.stack([xs, ys], dim=-1)  # [L, P, 2]
+    coords = torch.stack([xs, ys], dim=-1)  # [L, P, 2] (left bottom -> right top)
 
     # Unfold mask: [1, 1*P, L] -> [L, P] (valid cells)
-    patches_mask = unfold(mask_p).squeeze(0).transpose(0, 1).contiguous()
+    patches_mask = unfold(mask).squeeze(0).transpose(0, 1).contiguous()
     valid = (patches_mask > 0.5).to(coords.dtype)
 
     # Mark boundary points (spatial only)
-    eps_x = (xb - xa) / max(1, nx - 1)
-    eps_y = (yb - ya) / max(1, ny - 1)
+    eps_x = (xb - xa) / (nx - 1)
+    eps_y = (yb - ya) / (ny - 1)
     x = coords[..., 0]; y = coords[..., 1]
     is_bnd = ((x - xa).abs() <= 0.5*eps_x) | ((x - xb).abs() <= 0.5*eps_x) | \
              ((y - ya).abs() <= 0.5*eps_y) | ((y - yb).abs() <= 0.5*eps_y)
@@ -80,7 +74,7 @@ def extract_xy_patches(
 
     meta = {
         "L": L, "P": P, "kx": kx, "ky": ky, "sx": sx, "sy": sy,
-        "nx": nx, "ny": ny, "pad": (pw0, pw1, ph0, ph1)
+        "nx": nx, "ny": ny,
     }
     return {"coords": coords, "valid": valid, "is_bnd": is_bnd, "meta": meta}
 
@@ -134,7 +128,6 @@ def attach_time(
         padded_is_real = (idx_line >= 0) & (idx_line < nt)
     else:  # "none"
         t3p = t3  # no pad
-        pL = pR = 0
         idx_line = torch.arange(0, nt, device=device)
         padded_is_real = torch.ones_like(idx_line, dtype=torch.bool)
 

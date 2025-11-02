@@ -16,9 +16,9 @@ patch:
 
 # Grid configuration (total points)
 grid:
-  x: 70  # total grid points in x
-  y: 70  # total grid points in y
-  t: 30  # total grid points in time
+  x: 4  # total grid points in x
+  y: 4  # total grid points in y
+  t: 4  # total grid points in time
 
 # Stride for overlapping patches (optional)
 stride:
@@ -27,9 +27,9 @@ stride:
   t: 1   # same as patch.t means non-overlapping
 
 # Padding mode for boundary handling
-pad_mode:
-  xy: "zero"  # Options: "zero", "reflect", "replicate", "circular", "none"
-  t: "zero"   # Options: "zero", "reflect", "replicate", "circular", "none"
+pad:
+  xy: "none"  # Options: "zero", "reflect", "replicate", "circular", "none"
+  t: "none"   # Options: "zero", "reflect", "replicate", "circular", "none"
 
 # PDE parameters
 wave_speed: 1.0  # c in the wave equation
@@ -44,7 +44,7 @@ bc_type: dirichlet # dirichlet, analytic (not implemented "periodic", "neumann",
 bc_value: 0.0
 
 # Training
-batch_size: 32   # number of patches per batch
+batch_size: 4   # number of patches per batch
 
 # Override dimensions for compatibility with patch models
 in_features: 3   # (x, y, t)

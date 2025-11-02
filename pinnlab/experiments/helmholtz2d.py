@@ -39,8 +39,8 @@ class Helmholtz2D(BaseExperiment):
         self.sx = int(cfg.get("stride", {}).get("x", self.px))
         self.sy = int(cfg.get("stride", {}).get("y", self.py))
         self.st = int(cfg.get("stride", {}).get("t", self.pt))
-        self.pad_mode_s = cfg.get("pad", {}).get("space", "reflect")
-        self.pad_mode_t = cfg.get("pad", {}).get("time", "reflect")
+        self.pad_mode_s = cfg.get("pad", {}).get("xy", "none")
+        self.pad_mode_t = cfg.get("pad", {}).get("t", "none")
 
         # PDE constants
         self.c   = float(cfg.get("c", 1.0))
@@ -90,6 +90,8 @@ class Helmholtz2D(BaseExperiment):
             pad_mode=self.pad_mode_s,
             device=self.device,
         )
+        # sp["coords"]: [L, px*py, 2] (left bottom -> right top)
+        
         st_p = attach_time(
             sp,
             t0=self.t0, t1=self.t1, nt=self.gt,
@@ -104,8 +106,7 @@ class Helmholtz2D(BaseExperiment):
         Cheaper than forward; main cost is just allocating coords.
         """
         # You already have this sampler pipeline; reuse it:
-        P = self.sample_patches()      # dict with coords[N], valid, is_bnd, is_ic
-        self._patch_bank = P           # store for this epoch
+        self._patch_bank = self.sample_patches()      # dict with coords[N], valid, is_bnd, is_ic
 
     def sample_minibatch(self, k_patches: int, shuffle: bool = True):
         """
@@ -195,9 +196,6 @@ class Helmholtz2D(BaseExperiment):
         # keep only interior (not domain boundary, has neighbors one step away)
         keep_mask = (valid > 0.5) & (~(is_bnd > 0.5)) & self._safe_interior_mask(coords) # [B, px*py*pt]
         
-        if ep==0:
-            print("keep mask")
-            print(keep_mask)
         if not torch.any(keep_mask):
             return torch.tensor(0.0, device=dev, requires_grad=True)
 
@@ -218,17 +216,23 @@ class Helmholtz2D(BaseExperiment):
         if ep==0:
             print("Sampled PDE residual points (first minibatch of epoch):")
             print(C_)
-            print("C_ len")
+            print("C_len")
             print(C_.shape)
-        neigh = torch.cat([
+        
+        neigh = [
             C_,                     # 0: center
             C_ + ex, C_ - ex,      # 1: +x, 2: -x
             C_ + ey, C_ - ey,      # 3: +y, 4: -y
             C_ + et, C_ - et,      # 5: +t, 6: -t
-        ], dim=1).reshape(-1, 3)   # [M*7, 3]
+        ]
+        
+        results = []
+        for patch in neigh:
+            print("here!!!")
+            print(patch.shape)
+            result = model(patch)
+            results.append(result)
 
-        # One forward pass for all needed points (no AD on inputs)
-        U_all = model(neigh, ep)                   # [M*7, 1] or [M*7]
         if U_all.dim() == 1:
             U_all = U_all[:, None]
         U_all = U_all[:, :1]                   # ensure scalar field

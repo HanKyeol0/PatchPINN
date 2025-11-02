@@ -2,8 +2,8 @@ seed: 42
 device: "cuda:0"
 train:
   epochs: 3000
-  microbatches: 16           # how many micro-steps per epoch
-  patches_per_batch: 32      # how many patches per micro-step
+  microbatches: 4           # how many micro-steps per epoch
+  patches_per_batch: 4       # how many patches per micro-step
   accumulate_steps: 1        # set >1 if you want gradient accumulation
   optimizer:
     name: adam

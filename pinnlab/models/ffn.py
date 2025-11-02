@@ -31,13 +31,13 @@ class FFN(nn.Module):
         self.py = int(patch.get("y", 3))  # Default to 3
         
         # Determine if this is 2D or 3D problem based on input features
-        in_features = cfg.get("in_features", 2)
+        self.in_features = cfg.get("in_features", 2)
         
-        if in_features == 2:
+        if self.in_features == 2:
             # 2D steady-state problem
             self.pt = 1
             print(f"FFN (2D): {self.px}x{self.py}")
-        elif in_features == 3:
+        elif self.in_features == 3:
             # 3D time-dependent problem
             self.pt = int(patch.get("t", 3))  # Default to 3 for time dimension
             print(f"FFN (3D): {self.px}x{self.py}x{self.pt}")
@@ -64,20 +64,25 @@ class FFN(nn.Module):
         # Optional Fourier features
         use_fourier = cfg.get("use_fourier_features", True)
         fourier_scale = cfg.get("fourier_scale", 1.0)
+        fourier_dim = int(cfg.get("fourier_dim", 64))  # default sensible width
         
         if use_fourier:
-            self.fourier = FourierFeatures(in_features, hidden_dim, fourier_scale)
-            input_dim = hidden_dim
+            self.fourier = FourierFeatures(self.in_features, out_features=fourier_dim, scale=fourier_scale)
+            self.point_feat_dim = fourier_dim
         else:
             self.fourier = None
-            input_dim = in_features
+            self.point_feat_dim = self.in_features
+            print(f"[FFN] Fourier features disabled: point_feat_dim={self.point_feat_dim}")
+        
+        # The FIRST layer must take the entire patch vector:
+        self.input_dim = self.P * self.point_feat_dim
         
         # Build the network
         layers = []
         
         # Input layer
-        layers.append(nn.Linear(input_dim, hidden_dim))
-        layers.append(get_act(activation))
+        layers.append(nn.Linear(self.input_dim, hidden_dim))
+        layers.append(activation)
 
         # Optional: Layer normalization for stability
         self.use_layer_norm = cfg.get("use_layer_norm", False)
@@ -93,23 +98,23 @@ class FFN(nn.Module):
             for i in range(num_layers - 2):
                 layer = nn.Sequential(
                     nn.Linear(hidden_dim, hidden_dim),
-                    get_act(activation),
+                    activation,
                     Drop()
                     *( [nn.LayerNorm(hidden_dim)] if self.use_layer_norm else [] )
                 )
                 self.residual_layers.append(layer)
             # Output layer
-            self.output_layer = nn.Linear(hidden_dim, out_features)
+            self.output_layer = nn.Linear(hidden_dim, self.P * self.out_features)
         else:
             # Standard feedforward
             for _ in range(num_layers - 2):
                 layers.append(nn.Linear(hidden_dim, hidden_dim))
-                layers.append(get_act(activation))
+                layers.append(activation)
                 layers.append(Drop())
                 if self.use_layer_norm:
                     layers.append(nn.LayerNorm(hidden_dim))
             # Output layer
-            layers.append(nn.Linear(hidden_dim, out_features))
+            layers.append(nn.Linear(hidden_dim, self.P * out_features))
             self.network = nn.Sequential(*layers)
         
         # Initialize weights

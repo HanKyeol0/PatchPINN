@@ -164,7 +164,7 @@ def main(args):
         
         for mb in range(microbatches):
             # ---- fetch a small subset of patches
-            patches = exp.sample_minibatch(patches_per_batch, shuffle=True)
+            patches = exp.sample_minibatch(patches_per_batch, shuffle=False)
 
             # ---- compute losses on the minibatch
             loss_res = exp.pde_residual_loss(model, patches, ep)
