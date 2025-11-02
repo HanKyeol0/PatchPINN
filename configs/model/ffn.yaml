@@ -15,7 +15,7 @@ patch:
   t: None
 
 # Fourier features for better position encoding
-use_fourier_features: true
+use_fourier_features: false
 fourier_scale: 1.0
 
 # Optional enhancements

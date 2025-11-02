@@ -60,9 +60,9 @@ class Helmholtz2D(BaseExperiment):
         self.ic_v_weight = float(cfg.get("ic_v_weight", 1.0))
 
         # Grid spacings for FD
-        self.dx = (self.xb - self.xa) / max(1, self.gx - 1)
-        self.dy = (self.yb - self.ya) / max(1, self.gy - 1)
-        self.dt = (self.t1 - self.t0) / max(1, self.gt - 1)
+        self.dx = ((self.xb - self.xa) / (self.gx-1)) * 0.1
+        self.dy = ((self.yb - self.ya) / (self.gy-1)) * 0.1
+        self.dt = ((self.t1 - self.t0) / (self.gt-1)) * 0.1
 
         print(
             f"dx={self.dx:.6g}, dy={self.dy:.6g}, dt={self.dt:.6g}; "
@@ -180,68 +180,40 @@ class Helmholtz2D(BaseExperiment):
         )
         return mask
     
-    def _pde_residual_via_queries(self, model, P: Dict[str, torch.Tensor], ep) -> torch.Tensor:
+    def _pde_residual_via_queries(self, model, P: Dict[str, torch.Tensor]) -> torch.Tensor:
         """
         Central FD using on-the-fly model queries at ±dx, ±dy, ±dt around each retained center.
         Works even when px/py/pt < 3 (no interior cells exist inside a patch).
         """
         dev = self.device
-        coords = P["coords"].to(dev)   # [B, px*py*pt, 3]
-        valid  = P["valid"].to(dev)    # [B, px*py*pt]
-        is_bnd = P["is_bnd"].to(dev)   # [B, px*py*pt]
+        C = P["coords"].to(dev)   # [B, px*py*pt, 3]
+        # valid  = P["valid"].to(dev)    # [B, px*py*pt]
+        # is_bnd = P["is_bnd"].to(dev)   # [B, px*py*pt]
 
-        if coords.numel() == 0:
-            return torch.tensor(0.0, device=dev, requires_grad=True)
-
-        # keep only interior (not domain boundary, has neighbors one step away)
-        keep_mask = (valid > 0.5) & (~(is_bnd > 0.5)) & self._safe_interior_mask(coords) # [B, px*py*pt]
-        
-        if not torch.any(keep_mask):
-            return torch.tensor(0.0, device=dev, requires_grad=True)
-
-        C = coords[keep_mask]          # [M, 3]
-        if ep==0:
-            print("C shape")
-            print(C.shape)
-        M = C.shape[0]
-        if M == 0:
+        if C.numel() == 0:
             return torch.tensor(0.0, device=dev, requires_grad=True)
 
         # neighbor offsets
         ex = torch.tensor([self.dx, 0.0, 0.0], device=dev).view(1, 1, 3)
         ey = torch.tensor([0.0, self.dy, 0.0], device=dev).view(1, 1, 3)
         et = torch.tensor([0.0, 0.0, self.dt], device=dev).view(1, 1, 3)
-
-        C_ = C.view(M, 1, 3)
-        if ep==0:
-            print("Sampled PDE residual points (first minibatch of epoch):")
-            print(C_)
-            print("C_len")
-            print(C_.shape)
         
         neigh = [
-            C_,                     # 0: center
-            C_ + ex, C_ - ex,      # 1: +x, 2: -x
-            C_ + ey, C_ - ey,      # 3: +y, 4: -y
-            C_ + et, C_ - et,      # 5: +t, 6: -t
+            C,                   # 0: center
+            C + ex, C - ex,      # 1: +x, 2: -x
+            C + ey, C - ey,      # 3: +y, 4: -y
+            C + et, C - et,      # 5: +t, 6: -t
         ]
         
         results = []
         for patch in neigh:
-            print("here!!!")
-            print(patch.shape)
             result = model(patch)
             results.append(result)
-
-        if U_all.dim() == 1:
-            U_all = U_all[:, None]
-        U_all = U_all[:, :1]                   # ensure scalar field
-        U_all = U_all.view(M, 7, 1)            # [M, 7, 1]
-
-        Uc   = U_all[:, 0, 0]                  # center
-        Uxp  = U_all[:, 1, 0]; Uxm = U_all[:, 2, 0]
-        Uyp  = U_all[:, 3, 0]; Uym = U_all[:, 4, 0]
-        Utp  = U_all[:, 5, 0]; Utm = U_all[:, 6, 0]
+            
+        Uc = results[0].squeeze(2)
+        Uxp, Uxm = results[1].squeeze(2), results[2].squeeze(2)
+        Uyp, Uym = results[3].squeeze(2), results[4].squeeze(2)
+        Utp, Utm = results[5].squeeze(2), results[6].squeeze(2)
 
         # Central second derivatives
         Uxx = (Uxp - 2*Uc + Uxm) / (self.dx * self.dx)
@@ -249,7 +221,7 @@ class Helmholtz2D(BaseExperiment):
         Utt = (Utp - 2*Uc + Utm) / (self.dt * self.dt)
 
         # Forcing at centers
-        fx = self.f(C[:, 0], C[:, 1], C[:, 2])
+        fx = self.f(C[..., 0], C[..., 1], C[..., 2])
 
         # Residual: u_tt - c^2 (u_xx + u_yy) + λ u - f = 0
         R = Utt - (self.c ** 2) * (Uxx + Uyy) + self.lam * Uc - fx
@@ -257,26 +229,28 @@ class Helmholtz2D(BaseExperiment):
         return (R ** 2).mean()
 
     # ======== Losses ========
-    def pde_residual_loss(self, model, batch, ep) -> torch.Tensor:
+    def pde_residual_loss(self, model, batch) -> torch.Tensor:
         # Always use query-halo FD; robust for any patch size
-        return self._pde_residual_via_queries(model, batch["X_f"], ep=ep)
+        return self._pde_residual_via_queries(model, batch["X_f"])
 
     def boundary_loss(self, model, batch) -> torch.Tensor:
         dev = self.device
         if batch.get("X_b") is None:
             return torch.tensor(0.0, device=dev, requires_grad=True)
-        coords = batch["X_b"]["coords"].to(dev)      # [B,N,3]
-        bmask  = batch["X_b"]["mask"].to(dev) > 0.5  # [B,N]
+        C = batch["X_b"]["coords"].to(dev)      # [B, px*py*pt, 3]
+        bmask  = batch["X_b"]["mask"].to(dev) > 0.5  # [B, px*py*pt]
         keep = bmask.reshape(-1)
         if not torch.any(keep):
             return torch.tensor(0.0, device=dev, requires_grad=True)
-        X = coords.reshape(-1, 3)[keep]
-        U = model(X); U = U.view(-1, 1) if U.dim() == 1 else U[..., :1]
+        
+        U = model(C) # ; U = U.view(-1, 1) if U.dim() == 1 else U[..., :1]
+        U = U.squeeze(2).reshape(-1)[keep]
         
         if self.bc_type == "dirichlet":
             U_ref = torch.full_like(U, self.bc_value, device=dev, dtype=U.dtype)
         elif self.bc_type == "analytic":
-            U_ref = self.u_star(X[:, 0], X[:, 1], X[:, 2]).unsqueeze(-1)
+            U_ref = self.u_star(C[..., 0], C[..., 1], C[..., 2])
+            U_ref = U_ref.reshape(-1)[keep]
         return ((U - U_ref) ** 2).mean()
 
     def initial_loss(self, model, batch) -> torch.Tensor:
@@ -289,50 +263,46 @@ class Helmholtz2D(BaseExperiment):
         if P0 is None:
             return torch.tensor(0.0, device=dev, requires_grad=True)
 
-        coords = P0["coords"].to(dev)      # [B, N, 3]
-        imask  = (P0["mask"].to(dev) > 0.5)  # [B, N]
+        C = P0["coords"].to(dev)      # [B, px*py*pt, 3]
+        imask  = (P0["mask"].to(dev) > 0.5)  # [B, px*py*pt]
+        imask = imask.reshape(-1)
 
-        if coords.numel() == 0 or not torch.any(imask):
-            return torch.tensor(0.0, device=dev, requires_grad=True)
-
-        # Select IC locations
-        C_ic = coords[imask].view(-1, 3)     # [M,3]
-        if C_ic.shape[0] == 0:
+        if C.numel() == 0 or not torch.any(imask):
             return torch.tensor(0.0, device=dev, requires_grad=True)
 
         # Displacement IC: u ≈ u_star at t≈t0 positions
-        U_pred = model(C_ic)
-        if U_pred.dim() == 1: U_pred = U_pred[:, None]
-        U_pred = U_pred[:, :1]                         # [M,1]
-        U_ref  = self.u_star(C_ic[:,0], C_ic[:,1], C_ic[:,2]).unsqueeze(-1)
+        U_pred = model(C) # [B, px*py*pt, 1]
+        U_pred = U_pred.squeeze(2).reshape(-1)[imask] # remain only IC points
+        U_ref  = self.u_star(C[...,0], C[...,1], C[...,2]) # [B, px*py*pt]
+        U_ref  = U_ref.reshape(-1)[imask] # remain only IC points
         L_u = ((U_pred - U_ref) ** 2).mean()
 
-        # Optional velocity IC
-        if self.ic_v_weight <= 0.0:
-            return L_u
+        # # Optional velocity IC
+        # if self.ic_v_weight <= 0.0:
+        #     return L_u
 
-        # Keep only those IC points whose t + dt is still inside [t0, t1]
-        it = torch.round((C_ic[:,2] - self.t0) / self.dt)
-        ok_next = (it <= (self.gt - 2))   # has valid next step
-        if not torch.any(ok_next):
-            return L_u
+        # # Keep only those IC points whose t + dt is still inside [t0, t1]
+        # it = torch.round((C[:,2] - self.t0) / self.dt)
+        # ok_next = (it <= (self.gt - 2))   # has valid next step
+        # if not torch.any(ok_next):
+        #     return L_u
 
-        B_next = C_ic[ok_next]
-        B_next = torch.stack([B_next[:,0], B_next[:,1], B_next[:,2] + self.dt], dim=1)
+        # B_next = C[ok_next]
+        # B_next = torch.stack([B_next[:,0], B_next[:,1], B_next[:,2] + self.dt], dim=1)
 
-        U_t    = U_pred[ok_next]                      # at t
-        U_tp1  = model(B_next)
-        if U_tp1.dim() == 1: U_tp1 = U_tp1[:, None]
-        U_tp1  = U_tp1[:, :1]
+        # U_t    = U_pred[ok_next]                      # at t
+        # U_tp1  = model(B_next)
+        # if U_tp1.dim() == 1: U_tp1 = U_tp1[:, None]
+        # U_tp1  = U_tp1[:, :1]
 
-        # forward difference ut ≈ (U(t+dt) - U(t)) / dt
-        U_t_fd = (U_tp1 - U_t) / self.dt
+        # # forward difference ut ≈ (U(t+dt) - U(t)) / dt
+        # U_t_fd = (U_tp1 - U_t) / self.dt
 
-        ut_ref = self.ut_star(B_next[:,0], B_next[:,1], (B_next[:,2] - self.dt)) \
-                   .unsqueeze(-1)  # reference at base time t
-        L_v = ((U_t_fd - ut_ref) ** 2).mean()
+        # ut_ref = self.ut_star(B_next[:,0], B_next[:,1], (B_next[:,2] - self.dt)) \
+        #            .unsqueeze(-1)  # reference at base time t
+        # L_v = ((U_t_fd - ut_ref) ** 2).mean()
 
-        return L_u + self.ic_v_weight * L_v
+        return L_u # + self.ic_v_weight * L_v
 
     # -------- Evaluation & Plots (unchanged) --------
     def relative_l2_on_grid(self, model, grid_cfg) -> float:

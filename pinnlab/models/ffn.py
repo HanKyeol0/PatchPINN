@@ -68,14 +68,11 @@ class FFN(nn.Module):
         
         if use_fourier:
             self.fourier = FourierFeatures(self.in_features, out_features=fourier_dim, scale=fourier_scale)
-            self.point_feat_dim = fourier_dim
+            self.input_dim = self.P * fourier_dim
         else:
             self.fourier = None
-            self.point_feat_dim = self.in_features
-            print(f"[FFN] Fourier features disabled: point_feat_dim={self.point_feat_dim}")
-        
-        # The FIRST layer must take the entire patch vector:
-        self.input_dim = self.P * self.point_feat_dim
+            self.input_dim = self.P * self.in_features
+            print(f"[FFN] Fourier features disabled")
         
         # Build the network
         layers = []
@@ -127,10 +124,10 @@ class FFN(nn.Module):
             if m.bias is not None:
                 nn.init.zeros_(m.bias)
     
-    def forward(self, X: torch.Tensor, ep=None) -> torch.Tensor:
+    def forward(self, X: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            X: [P, in_features] or [B, P, in_features]
+            X: [B, P, in_features]
                where P = px * py (for 2D) or px * py * pt (for 3D)
         Returns:
             [P, out_features] or [B, P, out_features]
@@ -138,24 +135,15 @@ class FFN(nn.Module):
         # Handle both 2D and 3D inputs
         if X.dim() == 2:
             # [P, in_features] -> [1, P, in_features]
-            if ep==0:
-                print("X shape1:", X.shape)
             X = X.unsqueeze(0)
-            if ep==0:
-                print("X shape2:", X.shape)
             squeeze_output = True
         else:
             squeeze_output = False
         
         B, P, D = X.shape
-        
-        if ep==0:
-            print("Batch size:", B)
-            print("Points per patch:", P)
-            print("Input feature dim:", D)
 
         # Flatten batch and points dimensions
-        X_flat = X.reshape(B * P, D)  # [B*P, D]
+        X_flat = X.reshape(B, P * D)  # [B*P, D]
         
         # Apply Fourier features if available
         if self.fourier is not None:
@@ -179,8 +167,8 @@ class FFN(nn.Module):
                 out = self.output_layer(out)
         else:
             # Standard feedforward
-            out = self.network(X_flat)  # [B*P, out_features]
-        
+            out = self.network(X_flat)  # [B, P*out_features]
+
         # Apply layer norm if enabled
         if self.use_layer_norm and hasattr(self, 'norm_layers'):
             # This would need to be integrated into the forward pass above

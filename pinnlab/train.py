@@ -167,7 +167,7 @@ def main(args):
             patches = exp.sample_minibatch(patches_per_batch, shuffle=False)
 
             # ---- compute losses on the minibatch
-            loss_res = exp.pde_residual_loss(model, patches, ep)
+            loss_res = exp.pde_residual_loss(model, patches)
             loss_bc  = exp.boundary_loss(model, patches)
             loss_ic  = exp.initial_loss(model, patches)
 
