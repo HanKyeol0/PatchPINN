@@ -155,16 +155,18 @@ def main(args):
     iter_time_accum = 0.0
     iter_count = 0
 
+    exp.prepare_epoch_patch_bank()
+
     for ep in pbar:
         model.train()
         
-        exp.prepare_epoch_patch_bank()
+        # exp.prepare_epoch_patch_bank()
 
         running = {"res": 0.0, "bc": 0.0, "ic": 0.0, "total": 0.0}
         
         for mb in range(microbatches):
             # ---- fetch a small subset of patches
-            patches = exp.sample_minibatch(patches_per_batch, shuffle=True)
+            patches = exp.sample_minibatch(patches_per_batch, shuffle=True, ep=ep, mb=mb)
 
             # ---- compute losses on the minibatch
             loss_res = exp.pde_residual_loss(model, patches)

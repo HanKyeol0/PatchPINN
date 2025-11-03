@@ -99,8 +99,8 @@ def save_triptych_frames_2d(
       List of file paths of frames, ordered by time.
     """
     _ensure_dir(out_dir)
-    T, nx, ny = U_true_T.shape
-    assert U_pred_T.shape == (T, nx, ny)
+    nx, ny, T = U_true_T.shape
+    assert U_pred_T.shape == (nx, ny, T)
     xs = x if np.ndim(x) == 1 else x[0, :]
     ys = y if np.ndim(y) == 1 else y[:, 0]
     extent = [xs.min(), xs.max(), ys.min(), ys.max()]
@@ -115,8 +115,8 @@ def save_triptych_frames_2d(
 
     frame_paths = []
     for i in range(T):
-        ut = U_true_T[i]
-        up = U_pred_T[i]
+        ut = U_true_T[:,:,i]
+        up = U_pred_T[:,:,i]
         err = np.abs(ut - up)
 
         fig, axes = plt.subplots(1, 3, figsize=(12, 4), constrained_layout=True)

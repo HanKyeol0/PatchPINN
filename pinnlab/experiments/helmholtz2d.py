@@ -108,7 +108,7 @@ class Helmholtz2D(BaseExperiment):
         # You already have this sampler pipeline; reuse it:
         self._patch_bank = self.sample_patches()      # dict with coords[N], valid, is_bnd, is_ic
 
-    def sample_minibatch(self, k_patches: int, shuffle: bool = True):
+    def sample_minibatch(self, k_patches: int, shuffle: bool = True, ep: int = 0, mb: int = 0):
         """
         Return a sliced view of the current patch bank with only k_patches windows.
         Assumes self._patch_bank['coords'] is [B, P, 3]-like (batch of patches).
@@ -116,11 +116,12 @@ class Helmholtz2D(BaseExperiment):
         assert hasattr(self, "_patch_bank") and self._patch_bank is not None, \
                "Call prepare_epoch_patch_bank() at start of epoch."
         P = self._patch_bank
-        B = P["coords"].shape[0]
+        B = P["coords"].shape[0] # number of patches in the bank
         if shuffle:
             idx = torch.randperm(B, device=self.device)[:min(k_patches, B)]
         else:
-            idx = torch.arange(0, min(k_patches, B), device=self.device)
+            start_idx = ep * mb * k_patches
+            idx = torch.arange(start_idx, start_idx + k_patches, device=self.device) % B
         def _slice(d):
             out = {}
             for k, v in d.items():
@@ -346,8 +347,8 @@ class Helmholtz2D(BaseExperiment):
         ts_starts = _starts(nt_eval, kt)
 
         # Preallocate prediction tensor (T, nx, ny) and a written-mask
-        Up = torch.full((nt_eval, nx, ny), float("nan"), device=dev)
-        written = torch.zeros((nt_eval, nx, ny), dtype=torch.bool, device=dev)
+        Up = torch.full((nx, ny, nt_eval), float("nan"), device=dev)
+        written = torch.zeros((nx, ny, nt_eval), dtype=torch.bool, device=dev)
  
         with torch.no_grad():
             # Sweep time → y → x (t0..t1, bottom..top, left..right)
@@ -380,19 +381,19 @@ class Helmholtz2D(BaseExperiment):
                         for dt in range(kt):
                             tt = it0 + dt
                             # Build a mask of cells not yet written in this block
-                            block_written = written[tt, ix0:ix1, jy0:jy1]
+                            block_written = written[ix0:ix1, jy0:jy1, tt]
                             to_write = ~block_written
                             if to_write.any():
                                 # Write only where not written yet
-                                Up[tt, ix0:ix1, jy0:jy1][to_write] = up_patch[dt][to_write]
-                                written[tt, ix0:ix1, jy0:jy1][to_write] = True
+                                Up[ix0:ix1, jy0:jy1, tt][to_write] = up_patch[:,:,dt][to_write]
+                                written[ix0:ix1, jy0:jy1, tt][to_write] = True
 
         # Ground truth over the *entire* domain for all times
         Utrue = torch.empty_like(Up)
-        for it_idx in range(nt_eval):
-            # broadcast t[it_idx] to grid shape
-            tt = t[it_idx].expand_as(Xg)
-            Utrue[it_idx] = self.u_star(Xg, Yg, tt)
+        for it in range(nt_eval):
+            # broadcast t[it] to grid shape
+            tt = t[it].expand_as(Xg)
+            Utrue[:,:,it] = self.u_star(Xg, Yg, tt)
         # Utrue shape: [nt_eval, nx, ny]
 
         valid = ~torch.isnan(Up)
@@ -439,8 +440,8 @@ class Helmholtz2D(BaseExperiment):
         ts_starts = _starts(nt_eval, kt)
 
         # 3) buffers
-        U_pred_T = torch.full((nt_eval, nx, ny), float("nan"), device=dev)
-        written  = torch.zeros((nt_eval, nx, ny), dtype=torch.bool, device=dev)
+        U_pred_T = torch.full((nx, ny, nt_eval), float("nan"), device=dev)
+        written  = torch.zeros((nx, ny, nt_eval), dtype=torch.bool, device=dev)
 
         with torch.no_grad():
             for it0 in ts_starts:
@@ -465,23 +466,22 @@ class Helmholtz2D(BaseExperiment):
                         up = self._forward_points(model, coords)         # [P] or [P, C]
                         if up.dim() == 1:
                             up = up.unsqueeze(-1)
-                        up = up[..., :1].squeeze(-1).reshape(kx, ky, kt) # [kx,ky,kt]
+                        up = up[..., :1].squeeze(-1).view(kx, ky, kt) # [kx,ky,kt]
 
                         # Scatter: first-writer wins
                         for dt in range(kt):
                             tt = it0 + dt
-                            block_written = written[tt, ix0:ix1, jy0:jy1]    # [kx,ky]
+                            block_written = written[ix0:ix1, jy0:jy1, tt]    # [kx,ky]
                             to_write = ~block_written
                             if to_write.any():
-                                plane = up[:, :, dt]                          # [kx,ky]
-                                U_pred_T[tt, ix0:ix1, jy0:jy1][to_write] = plane[to_write]
-                                written[tt, ix0:ix1, jy0:jy1][to_write] = True
+                                U_pred_T[ix0:ix1, jy0:jy1, tt][to_write] = up[:, :, dt][to_write]
+                                written[ix0:ix1, jy0:jy1, tt][to_write] = True
 
         # 4) ground-truth
-        U_true_T = torch.empty_like(U_pred_T)
+        U_true_T = torch.empty_like(U_pred_T) # [nx,ny,nt_eval]
         for it in range(nt_eval):
             tval = ts[it].expand_as(Xg)
-            U_true_T[it] = self.u_star(Xg, Yg, tval)
+            U_true_T[:,:,it] = self.u_star(Xg, Yg, tval)
 
         return x, y, ts, U_pred_T, U_true_T
 
@@ -504,8 +504,8 @@ class Helmholtz2D(BaseExperiment):
 
         for it in picks:
             prefix = f"t{it:03d}_t{float(ts[it]):.4f}"
-            u_true = U_true_T[it].detach().cpu().numpy()   # [nx,ny]
-            u_pred = U_pred_T[it].detach().cpu().numpy()   # [nx,ny]
+            u_true = U_true_T[:,:,it].detach().cpu().numpy()   # [nx,ny]
+            u_pred = U_pred_T[:,:,it].detach().cpu().numpy()   # [nx,ny]
             figs = save_plots_2d(x_np, y_np, u_true, u_pred, out_dir, prefix)
             paths.update(figs)
         return paths
@@ -529,15 +529,15 @@ class Helmholtz2D(BaseExperiment):
         # -----------------------------------------------------------------------------------
 
         # To numpy
-        x_np   = x.detach().cpu().numpy()
-        y_np   = y.detach().cpu().numpy()
-        ts_np  = ts.detach().cpu().numpy()
-        Utr_np = U_true_T.detach().cpu().numpy()
-        Upr_np = U_pred_T.detach().cpu().numpy()
+        x  = x.detach().cpu().numpy()
+        y  = y.detach().cpu().numpy()
+        ts = ts.detach().cpu().numpy()
+        U_true_T = U_true_T.detach().cpu().numpy()
+        U_pred_T = U_pred_T.detach().cpu().numpy()
 
         out_path = os.path.join(out_dir, filename)
         return save_video_2d(
-            x_np, y_np, Utr_np, Upr_np, ts_np,
+            x, y, U_true_T, U_pred_T, ts,
             out_path=out_path, fps=fps,
             vmin=Umin, vmax=Umax, err_vmax=err_vmax, prefix="frame",
         )

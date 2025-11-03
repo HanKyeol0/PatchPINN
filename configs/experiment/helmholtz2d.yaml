@@ -1,7 +1,7 @@
 # run: scripts/ffn/helmholtz2d.sh
 
-tag: REVIVE7
-device: "cuda:1"
+tag: REVIVE10
+device: "cuda:0"
 
 domain:
   x: [-1.0, 1.0]
@@ -12,7 +12,7 @@ domain:
 patch:
   x: 5   # points per patch in x
   y: 5   # points per patch in y
-  t: 5   # points per patch in time
+  t: 3   # points per patch in time
 
 # Grid configuration (total points)
 grid:
