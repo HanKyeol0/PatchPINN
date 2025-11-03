@@ -1,24 +1,24 @@
 # run: scripts/ffn/helmholtz2d.sh
 
-tag: revive2
-device: "cuda:0"
+tag: REVIVE7
+device: "cuda:1"
 
 domain:
-  x: [0.0, 1.0]
-  y: [0.0, 1.0]
-  t: [0.0, 1.0]
+  x: [-1.0, 1.0]
+  y: [-1.0, 1.0]
+  t: [-1.0, 1.0]
 
 # Patch configuration
 patch:
-  x: 3   # points per patch in x
-  y: 3   # points per patch in y
-  t: 3   # points per patch in time
+  x: 5   # points per patch in x
+  y: 5   # points per patch in y
+  t: 5   # points per patch in time
 
 # Grid configuration (total points)
 grid:
-  x: 4  # total grid points in x
-  y: 4  # total grid points in y
-  t: 4  # total grid points in time
+  x: 120  # total grid points in x
+  y: 120  # total grid points in y
+  t: 60  # total grid points in time
 
 # Stride for overlapping patches (optional)
 stride:
@@ -35,8 +35,8 @@ pad:
 wave_speed: 1.0  # c in the wave equation
 lambda: 0.0      # damping coefficient
 a1: 1.0          # frequency in x direction
-a2: 1.0          # frequency in y direction
-omega: 1.0       # temporal frequency
+a2: 2.0          # frequency in y direction
+omega: 2.0       # temporal frequency
 ic_v_weight: 1.0
 
 derivative_method: finite_diff # autograd, finite_diff

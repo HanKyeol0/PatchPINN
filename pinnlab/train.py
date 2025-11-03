@@ -164,7 +164,7 @@ def main(args):
         
         for mb in range(microbatches):
             # ---- fetch a small subset of patches
-            patches = exp.sample_minibatch(patches_per_batch, shuffle=False)
+            patches = exp.sample_minibatch(patches_per_batch, shuffle=True)
 
             # ---- compute losses on the minibatch
             loss_res = exp.pde_residual_loss(model, patches)
@@ -257,7 +257,7 @@ def main(args):
     }
 
     if exp_cfg.get("video", {}).get("enabled", False):
-        vid_grid = exp_cfg.get("video", {}).get("grid", {"x": exp_cfg["grid"]["x"], "y": exp_cfg["grid"]["y"]})
+        vid_grid = exp_cfg.get("video", {}).get("grid", {"nx": exp_cfg["grid"]["x"], "ny": exp_cfg["grid"]["y"]})
         nt_video = exp_cfg.get("video", {}).get("nt", exp_cfg["grid"]["t"])
         fps      = exp_cfg.get("video", {}).get("fps", 10)
         out_fmt  = exp_cfg.get("video", {}).get("format", "mp4")  # "mp4" or "gif"

@@ -306,89 +306,238 @@ class Helmholtz2D(BaseExperiment):
 
     # -------- Evaluation & Plots (unchanged) --------
     def relative_l2_on_grid(self, model, grid_cfg) -> float:
+        """
+        Evaluate relative L2 error by tiling the (x,y,t) grid with non-overlapping
+        patches of size (px,py,pt). If the grid size is not divisible by the patch
+        size, we add a final patch that *overlaps* the previous one so that the
+        right/top (and last time window) edges are covered.
+
+        Patch traversal order:
+        x: left -> right, y: bottom -> top, t: t0 -> t1.
+
+        Combination rule:
+        We write each prediction into a preallocated tensor initialized with NaNs.
+        If a cell is already filled (can happen for the edge-overlap patches),
+        we keep the first value and skip later writes to that cell.
+        """
         dev = self.device
         nx, ny = int(grid_cfg["nx"]), int(grid_cfg["ny"])
-        nt_eval = int(grid_cfg.get("nt", 5))
-        Xg, Yg = linspace_2d(self.xa, self.xb, self.ya, self.yb, nx, ny, dev)
-        ts = torch.linspace(self.t0, self.t1, nt_eval, device=dev)
+        nt_eval = int(grid_cfg.get("nt", self.gt))  # fall back to train-time gt if not given
+
+        # Build evaluation grid
+        x = torch.linspace(self.xa, self.xb, nx, device=dev)
+        y = torch.linspace(self.ya, self.yb, ny, device=dev)
+        t = torch.linspace(self.t0, self.t1, nt_eval, device=dev)
+        Xg, Yg = torch.meshgrid(x, y, indexing="xy")
+        
+        # Helpers to produce start indices with “edge-clamping” to include the last tile
+        def _starts(n: int, k: int):
+            # non-overlapping starts
+            s = list(range(0, max(n - k + 1, 1), k))
+            # ensure we cover the far edge; append last start (may overlap) if needed
+            last = n - k
+            if len(s) == 0 or s[-1] != last:
+                s.append(last)
+            return s
+
+        kx, ky, kt = self.px, self.py, self.pt
+        xs = _starts(nx, kx)
+        ys = _starts(ny, ky)
+        ts_starts = _starts(nt_eval, kt)
+
+        # Preallocate prediction tensor (T, nx, ny) and a written-mask
+        Up = torch.full((nt_eval, nx, ny), float("nan"), device=dev)
+        written = torch.zeros((nt_eval, nx, ny), dtype=torch.bool, device=dev)
+ 
         with torch.no_grad():
-            rels = []
-            for t in ts:
-                XY = torch.stack([Xg.reshape(-1), Yg.reshape(-1)], dim=1)
-                T = torch.full((XY.shape[0], 1), float(t), device=dev)
-                coords = torch.cat([XY, T], dim=1)
-                up = model(coords).reshape(nx, ny)
-                ut = self.u_star(Xg, Yg, t.expand_as(Xg))
-                num = torch.linalg.norm((up - ut).reshape(-1))
-                den = torch.linalg.norm(ut.reshape(-1)) + 1e-12
-                rels.append((num / den).item())
-            return float(sum(rels) / max(1, len(rels)))
+            # Sweep time → y → x (t0..t1, bottom..top, left..right)
+            for it0 in ts_starts:
+                it1 = it0 + kt
+                # time slice values and index range
+                t_slice = t[it0:it1]                       # [kt]
+
+                for jy0 in ys:
+                    jy1 = jy0 + ky
+                    y_vec = y[jy0:jy1]  # [ky]
+                    
+                    for ix0 in xs:
+                        ix1 = ix0 + kx
+                        x_vec = x[ix0:ix1]  # [kx]
+
+                        # Extract the spatial block
+                        X3D = x_vec.view(-1, 1, 1).repeat(1, ky, kt)
+                        Y3D = y_vec.view(1, -1, 1).repeat(kx, 1, kt)
+                        T3D = t_slice.view(1, 1, -1).repeat(kx, ky, 1)
+                        
+                        coords = torch.stack([X3D, Y3D, T3D], dim=-1).view(-1, 3)  # [kx*ky*kt, 3]
+
+                        # Model prediction for this patch
+                        up_patch = self._forward_points(model, coords)  # [kx*ky*kt, 1]
+                        up_patch = up_patch[..., :1].squeeze(-1).view(kx, ky, kt)  # [kx,ky,kt]
+
+                        # Scatter into the global tensor, skipping already-written cells
+                        # We iterate in the same order to preserve the “first writer wins” rule.
+                        for dt in range(kt):
+                            tt = it0 + dt
+                            # Build a mask of cells not yet written in this block
+                            block_written = written[tt, ix0:ix1, jy0:jy1]
+                            to_write = ~block_written
+                            if to_write.any():
+                                # Write only where not written yet
+                                Up[tt, ix0:ix1, jy0:jy1][to_write] = up_patch[dt][to_write]
+                                written[tt, ix0:ix1, jy0:jy1][to_write] = True
+
+        # Ground truth over the *entire* domain for all times
+        Utrue = torch.empty_like(Up)
+        for it_idx in range(nt_eval):
+            # broadcast t[it_idx] to grid shape
+            tt = t[it_idx].expand_as(Xg)
+            Utrue[it_idx] = self.u_star(Xg, Yg, tt)
+        # Utrue shape: [nt_eval, nx, ny]
+
+        valid = ~torch.isnan(Up)
+        if not valid.any():
+            return float("nan")
+
+        num = torch.linalg.norm((Up[valid] - Utrue[valid]).reshape(-1))
+        den = torch.linalg.norm(Utrue[valid].reshape(-1)) + 1e-12
+        return float((num / den).item())
+
+    def _tile_pred_true_on_grid(self, model, grid_cfg, nt_override: int = None):
+        """
+        Assemble predictions (and ground-truth) over the whole (x,y,t) domain
+        using the same tiling logic and ordering as relative_l2_on_grid():
+        - tiles: non-overlapping stride (px,py,pt), with edge-overlap if needed
+        - ordering inside a tile: t-fast, then y, then x
+        - combination rule: first-writer wins
+        Returns:
+        x (nx,), y (ny,), ts (T,), U_pred_T (T,nx,ny), U_true_T (T,nx,ny)
+        """
+        dev = self.device
+        nx, ny = int(grid_cfg['nx']), int(grid_cfg['ny'])
+        nt_eval = int(grid_cfg.get('nt', self.gt))
+        if nt_override is not None:
+            nt_eval = int(nt_override)
+
+        # 1) axes and base grids
+        x = torch.linspace(self.xa, self.xb, nx, device=dev)
+        y = torch.linspace(self.ya, self.yb, ny, device=dev)
+        ts = torch.linspace(self.t0, self.t1, nt_eval, device=dev)
+        Xg, Yg = torch.meshgrid(x, y, indexing="xy")   # [nx,ny]
+
+        # 2) start indices (non-overlap + edge-clamp)
+        def _starts(n: int, k: int):
+            s = list(range(0, max(n - k + 1, 1), k))
+            last = n - k
+            if len(s) == 0 or s[-1] != last:
+                s.append(last)
+            return s
+
+        kx, ky, kt = self.px, self.py, self.pt
+        xs = _starts(nx, kx)
+        ys = _starts(ny, ky)
+        ts_starts = _starts(nt_eval, kt)
+
+        # 3) buffers
+        U_pred_T = torch.full((nt_eval, nx, ny), float("nan"), device=dev)
+        written  = torch.zeros((nt_eval, nx, ny), dtype=torch.bool, device=dev)
+
+        with torch.no_grad():
+            for it0 in ts_starts:
+                it1 = it0 + kt
+                t_slice = ts[it0:it1]            # [kt]
+
+                for jy0 in ys:
+                    jy1 = jy0 + ky
+                    y_vec = y[jy0:jy1]          # [ky]
+
+                    for ix0 in xs:
+                        ix1 = ix0 + kx
+                        x_vec = x[ix0:ix1]      # [kx]
+
+                        # Build coords with t-fast → y → x
+                        X3D = x_vec.view(-1, 1, 1).repeat(1, ky, kt)     # [kx,ky,kt]
+                        Y3D = y_vec.view(1, -1, 1).repeat(kx, 1, kt)     # [kx,ky,kt]
+                        T3D = t_slice.view(1, 1, -1).repeat(kx, ky, 1)   # [kx,ky,kt]
+                        coords = torch.stack([X3D, Y3D, T3D], dim=-1).reshape(-1, 3)  # [kx*ky*kt,3]
+
+                        # Forward
+                        up = self._forward_points(model, coords)         # [P] or [P, C]
+                        if up.dim() == 1:
+                            up = up.unsqueeze(-1)
+                        up = up[..., :1].squeeze(-1).reshape(kx, ky, kt) # [kx,ky,kt]
+
+                        # Scatter: first-writer wins
+                        for dt in range(kt):
+                            tt = it0 + dt
+                            block_written = written[tt, ix0:ix1, jy0:jy1]    # [kx,ky]
+                            to_write = ~block_written
+                            if to_write.any():
+                                plane = up[:, :, dt]                          # [kx,ky]
+                                U_pred_T[tt, ix0:ix1, jy0:jy1][to_write] = plane[to_write]
+                                written[tt, ix0:ix1, jy0:jy1][to_write] = True
+
+        # 4) ground-truth
+        U_true_T = torch.empty_like(U_pred_T)
+        for it in range(nt_eval):
+            tval = ts[it].expand_as(Xg)
+            U_true_T[it] = self.u_star(Xg, Yg, tval)
+
+        return x, y, ts, U_pred_T, U_true_T
 
     def plot_final(self, model, grid_cfg, out_dir):
-        dev = self.device
-        nx, ny = int(grid_cfg["nx"]), int(grid_cfg["ny"])
-        nt_eval = int(grid_cfg.get("nt", 3))
-        ts = torch.linspace(self.t0, self.t1, nt_eval, device=dev)
-        Xg, Yg = linspace_2d(self.xa, self.xb, self.ya, self.yb, nx, ny, dev)
+        """
+        Save 2D triptych plots (true / pred / |err|) at a few evenly spaced times.
+        Uses tiling with t→y→x order and first-writer-wins, consistent with training.
+        Returns a dict of figure-name → path.
+        """
+        os.makedirs(out_dir, exist_ok=True)
+        x, y, ts, U_pred_T, U_true_T = self._tile_pred_true_on_grid(model, grid_cfg)
+
+        # pick 3~4 time indices
+        T = ts.numel()
+        picks = [0, T // 2, T - 1] if T >= 3 else list(range(T))
         paths = {}
-        with torch.no_grad():
-            for i, t in enumerate(ts):
-                XY = torch.stack([Xg.reshape(-1), Yg.reshape(-1)], dim=1)
-                T = torch.full((XY.shape[0], 1), float(t), device=dev)
-                coords = torch.cat([XY, T], dim=1)
-                up = model(coords).reshape(nx, ny)
-                ut = self.u_star(Xg, Yg, t.expand_as(Xg))
-                figs = save_plots_2d(
-                    Xg.detach().cpu().numpy(),
-                    Yg.detach().cpu().numpy(),
-                    ut.detach().cpu().numpy(),
-                    up.detach().cpu().numpy(),
-                    out_dir,
-                    prefix=f"helmholtz2d_time_t{i}"
-                )
-                paths.update(figs)
+
+        x_np = x.detach().cpu().numpy()
+        y_np = y.detach().cpu().numpy()
+
+        for it in picks:
+            prefix = f"t{it:03d}_t{float(ts[it]):.4f}"
+            u_true = U_true_T[it].detach().cpu().numpy()   # [nx,ny]
+            u_pred = U_pred_T[it].detach().cpu().numpy()   # [nx,ny]
+            figs = save_plots_2d(x_np, y_np, u_true, u_pred, out_dir, prefix)
+            paths.update(figs)
         return paths
 
-
-    def make_video(
-        self, model, grid_cfg, out_dir,
-        filename="helmholtz2d_time.mp4", nt_video=60, fps=10,
-        vmin=None, vmax=None, err_vmax=None,
-    ):
-        """
-        Render a video of True | Pred | |True-Pred| across time.
-
-        grid_cfg: {"nx": int, "ny": int}
-        """
-
-        dev = self.device
-        nx, ny = int(grid_cfg["x"]), int(grid_cfg["y"])
-        ts = torch.linspace(self.t0, self.t1, nt_video, device=dev)
-
-        Xg, Yg = linspace_2d(self.xa, self.xb, self.ya, self.yb, nx, ny, dev)
-        XY = torch.stack([Xg.reshape(-1), Yg.reshape(-1)], dim=1)  # [nx*ny, 2]
-
-        Utrue_list, Upred_list = [], []
-        with torch.no_grad():
-            for t in ts:
-                T = torch.full((XY.shape[0], 1), float(t), device=dev)
-                coords = torch.cat([XY, T], dim=1)                 # [nx*ny, 3]
-                up = self._forward_points(model, coords).reshape(nx, ny)
-                ut = self.u_star(Xg, Yg, t.expand_as(Xg))
-                Utrue_list.append(ut.detach().cpu().numpy())
-                Upred_list.append(up.detach().cpu().numpy())
-
-        U_true_T = np.stack(Utrue_list, axis=0)  # [T, nx, ny]
-        U_pred_T = np.stack(Upred_list, axis=0)  # [T, nx, ny]
-        ts_np = ts.detach().cpu().numpy()
+    def make_video(self, model, grid_cfg, out_dir, nt_video=None, fps=10, filename="evolution.mp4"):
+        import numpy as np  # <-- add this import (inside or at file top)
 
         os.makedirs(out_dir, exist_ok=True)
-        video_path = os.path.join(out_dir, filename)
+        x, y, ts, U_pred_T, U_true_T = self._tile_pred_true_on_grid(model, grid_cfg, nt_override=nt_video)
+
+        # --- robust global color scales using NumPy (handles NaNs on all torch versions) ---
+        stack_np = torch.stack([U_true_T, U_pred_T], dim=0).detach().cpu().numpy()  # [2, T, nx, ny]
+        Umin = float(np.nanmin(stack_np))
+        Umax = float(np.nanmax(stack_np))
+
+        err_np = torch.abs(U_true_T - U_pred_T).detach().cpu().numpy()
+        if np.isfinite(err_np).any():
+            err_vmax = float(np.nanpercentile(err_np, 99.5))  # robust cap for error colormap
+        else:
+            err_vmax = None
+        # -----------------------------------------------------------------------------------
+
+        # To numpy
+        x_np   = x.detach().cpu().numpy()
+        y_np   = y.detach().cpu().numpy()
+        ts_np  = ts.detach().cpu().numpy()
+        Utr_np = U_true_T.detach().cpu().numpy()
+        Upr_np = U_pred_T.detach().cpu().numpy()
+
+        out_path = os.path.join(out_dir, filename)
         return save_video_2d(
-            Xg.detach().cpu().numpy(),
-            Yg.detach().cpu().numpy(),
-            U_true_T, U_pred_T, ts_np,
-            out_path=video_path, fps=fps,
-            vmin=vmin, vmax=vmax, err_vmax=err_vmax,
-            prefix="helmholtz2d"
+            x_np, y_np, Utr_np, Upr_np, ts_np,
+            out_path=out_path, fps=fps,
+            vmin=Umin, vmax=Umax, err_vmax=err_vmax, prefix="frame",
         )

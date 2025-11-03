@@ -3,8 +3,8 @@ in_features: 2    # (x, y, t) for time-dependent problems
 out_features: 1
 
 # FFN architecture
-hidden_dim: 64
-num_layers: 6     # Deeper network for time-dependent problems
+hidden_dim: 128
+num_layers: 8     # Deeper network for time-dependent problems
 activation: tanh  # tanh often works better for PINNs
 dropout: 0
 
