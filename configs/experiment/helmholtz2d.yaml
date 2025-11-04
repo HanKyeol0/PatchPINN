@@ -1,7 +1,7 @@
 # run: scripts/ffn/helmholtz2d.sh
 
-tag: REVIVE10
-device: "cuda:0"
+tag: REVIVE21
+device: cuda:0
 
 domain:
   x: [-1.0, 1.0]
@@ -10,15 +10,15 @@ domain:
 
 # Patch configuration
 patch:
-  x: 5   # points per patch in x
-  y: 5   # points per patch in y
+  x: 3   # points per patch in x
+  y: 3   # points per patch in y
   t: 3   # points per patch in time
 
 # Grid configuration (total points)
 grid:
-  x: 120  # total grid points in x
-  y: 120  # total grid points in y
-  t: 60  # total grid points in time
+  x: 90  # total grid points in x
+  y: 90  # total grid points in y
+  t: 30  # total grid points in time
 
 # Stride for overlapping patches (optional)
 stride:
@@ -28,8 +28,8 @@ stride:
 
 # Padding mode for boundary handling
 pad:
-  xy: "none"  # Options: "zero", "reflect", "replicate", "circular", "none"
-  t: "none"   # Options: "zero", "reflect", "replicate", "circular", "none"
+  xy: "none"  # Options: "zero", "reflect", "replicate", "circular", "none", "extend"
+  t: "none"   # Options: "zero", "reflect", "replicate", "circular", "none", "extend"
 
 # PDE parameters
 wave_speed: 1.0  # c in the wave equation
@@ -39,7 +39,7 @@ a2: 2.0          # frequency in y direction
 omega: 2.0       # temporal frequency
 ic_v_weight: 1.0
 
-derivative_method: finite_diff # autograd, finite_diff
+derivative_method: finite_diff_neighbors # autodiff, finite_diff_grid, finite_diff_neighbors
 bc_type: dirichlet # dirichlet, analytic (not implemented "periodic", "neumann", .. yet)
 bc_value: 0.0
 

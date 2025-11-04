@@ -21,6 +21,9 @@ class Helmholtz2D(BaseExperiment):
 
     def __init__(self, cfg, device):
         super().__init__(cfg, device)
+        
+        # derivative method
+        self.derivative_method = cfg.get("derivative_method", "finite_diff_grid")  # "finite_diff_grid", "finite_diff_neighbors", "autodiff"
 
         # Domain
         self.xa, self.xb = cfg["domain"]["x"]
@@ -60,9 +63,9 @@ class Helmholtz2D(BaseExperiment):
         self.ic_v_weight = float(cfg.get("ic_v_weight", 1.0))
 
         # Grid spacings for FD
-        self.dx = ((self.xb - self.xa) / (self.gx-1)) * 0.1
-        self.dy = ((self.yb - self.ya) / (self.gy-1)) * 0.1
-        self.dt = ((self.t1 - self.t0) / (self.gt-1)) * 0.1
+        self.dx = ((self.xb - self.xa) / (self.gx-1)) * 0.5
+        self.dy = ((self.yb - self.ya) / (self.gy-1)) * 0.5
+        self.dt = ((self.t1 - self.t0) / (self.gt-1)) * 0.5
 
         print(
             f"dx={self.dx:.6g}, dy={self.dy:.6g}, dt={self.dt:.6g}; "
@@ -181,16 +184,20 @@ class Helmholtz2D(BaseExperiment):
         )
         return mask
     
-    def _pde_residual_via_queries(self, model, P: Dict[str, torch.Tensor]) -> torch.Tensor:
+    def _pde_residual_FDneighbors(self, model, P: Dict[str, torch.Tensor]) -> torch.Tensor:
         """
         Central FD using on-the-fly model queries at ±dx, ±dy, ±dt around each retained center.
         Works even when px/py/pt < 3 (no interior cells exist inside a patch).
         """
         dev = self.device
         C = P["coords"].to(dev)   # [B, px*py*pt, 3]
-        # valid  = P["valid"].to(dev)    # [B, px*py*pt]
-        # is_bnd = P["is_bnd"].to(dev)   # [B, px*py*pt]
-
+        valid  = P["valid"].to(dev) > 0.5   # [B, px*py*pt]
+        is_bnd = P["is_bnd"].to(dev) > 0.5   # [B, px*py*pt]
+        
+        keep = valid & (~is_bnd)
+        if not keep.any():
+            return torch.tensor(0.0, device=dev, requires_grad=True)
+        
         if C.numel() == 0:
             return torch.tensor(0.0, device=dev, requires_grad=True)
 
@@ -225,14 +232,96 @@ class Helmholtz2D(BaseExperiment):
         fx = self.f(C[..., 0], C[..., 1], C[..., 2])
 
         # Residual: u_tt - c^2 (u_xx + u_yy) + λ u - f = 0
-        R = Utt - (self.c ** 2) * (Uxx + Uyy) + self.lam * Uc - fx
+        R = (Utt - (self.c ** 2) * (Uxx + Uyy) + self.lam * Uc - fx)[keep]
 
         return (R ** 2).mean()
+            
+    def _pde_residual_autodiff(self, model, P: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """
+        PDE residual via automatic differentiation on patch batches.
+
+        Inputs:
+          P["coords"]: [B, P, 3] with (x,y,t)
+          P["valid"] : [B, P]  -> spatial/time valid (excludes padded)
+          P["is_bnd"]: [B, P]  -> boundary mask (True at boundary cells)
+        Returns:
+          scalar loss = mean( R^2 ) over valid, non-boundary points
+        """
+        dev = self.device
+        C = P["coords"].to(dev)
+        V = P["valid"].to(dev)    # [B, px*py*pt] (bool)
+        B = P["is_bnd"].to(dev)   # [B, px*py*pt] (bool)
+        
+        if C.numel() == 0:
+            return torch.tensor(0.0, device=dev, requires_grad=True)
+        
+        # ---- cast masks to bool explicitly ----
+        if V.dtype is not torch.bool:
+            V = V != 0
+        if B.dtype is not torch.bool:
+            B = B != 0
+            
+        # Keep only interior (valid & not boundary) for the PDE residual
+        keep = V & (~B)   # [B, px*py*pt]
+        if not keep.any():
+            return torch.tensor(0.0, device=dev, requires_grad=True)
+        
+        # We need gradients wrt coordinates
+        C = C.detach().clone().requires_grad_(True)  # [B, px*py*pt, 3]
+        
+        # Forward through the model on the whole patch-batch
+        U = model(C)  # [B, px*py*pt, 1]
+        if U.dim() == 2:
+            U = U.unsqueeze(-1)
+        U = U[..., :1].squeeze(-1)  # [B, px*py*pt]
+        
+        # First derivatives: grad(U, C) -> [B, P, 3]
+        ones = torch.ones_like(U, device=dev)
+        g1 = torch.autograd.grad(
+            U, C, grad_outputs=ones,
+            create_graph=True, retain_graph=True, allow_unused=False
+        )[0]
+        Ux, Uy, Ut = g1[..., 0], g1[..., 1], g1[..., 2]  # [B, P]
+        
+        # Second derivatives: grad(Ux, C), grad(Uy, C), grad(Ut, C)
+        ones_x = torch.ones_like(Ux, device=dev)
+        ones_y = torch.ones_like(Uy, device=dev)
+        ones_t = torch.ones_like(Ut, device=dev)
+        
+        g2x = torch.autograd.grad(
+            Ux, C, grad_outputs=ones_x,
+            create_graph=True, retain_graph=True, allow_unused=False
+        )[0]
+        g2y = torch.autograd.grad(
+            Uy, C, grad_outputs=ones_y,
+            create_graph=True, retain_graph=True, allow_unused=False
+        )[0]
+        g2t = torch.autograd.grad(
+            Ut, C, grad_outputs=ones_t,
+            create_graph=True, retain_graph=True, allow_unused=False
+        )[0]
+        
+        Uxx = g2x[..., 0]                         # [B, P]
+        Uyy = g2y[..., 1]                         # [B, P]
+        Utt = g2t[..., 2]                         # [B, P]
+
+        # Forcing term at the same coordinates
+        fx = self.f(C[..., 0], C[..., 1], C[..., 2])  # [B, P]
+
+        # Residual: u_tt - c^2 (u_xx + u_yy) + λ u - f = 0
+        R = Utt - (self.c ** 2) * (Uxx + Uyy) + self.lam * U - fx  # [B, P]
+
+        # Reduce over interior points only
+        R_keep = R[keep]
+        return (R_keep ** 2).mean() if R_keep.numel() > 0 \
+               else torch.tensor(0.0, device=dev, requires_grad=True)
 
     # ======== Losses ========
     def pde_residual_loss(self, model, batch) -> torch.Tensor:
-        # Always use query-halo FD; robust for any patch size
-        return self._pde_residual_via_queries(model, batch["X_f"])
+        if self.derivative_method == "finite_diff_neighbors":
+            return self._pde_residual_FDneighbors(model, batch["X_f"])
+        elif self.derivative_method == "autodiff":
+            return self._pde_residual_autodiff(model, batch["X_f"])
 
     def boundary_loss(self, model, batch) -> torch.Tensor:
         dev = self.device
@@ -306,104 +395,6 @@ class Helmholtz2D(BaseExperiment):
         return L_u # + self.ic_v_weight * L_v
 
     # -------- Evaluation & Plots (unchanged) --------
-    def relative_l2_on_grid(self, model, grid_cfg) -> float:
-        """
-        Evaluate relative L2 error by tiling the (x,y,t) grid with non-overlapping
-        patches of size (px,py,pt). If the grid size is not divisible by the patch
-        size, we add a final patch that *overlaps* the previous one so that the
-        right/top (and last time window) edges are covered.
-
-        Patch traversal order:
-        x: left -> right, y: bottom -> top, t: t0 -> t1.
-
-        Combination rule:
-        We write each prediction into a preallocated tensor initialized with NaNs.
-        If a cell is already filled (can happen for the edge-overlap patches),
-        we keep the first value and skip later writes to that cell.
-        """
-        dev = self.device
-        nx, ny = int(grid_cfg["nx"]), int(grid_cfg["ny"])
-        nt_eval = int(grid_cfg.get("nt", self.gt))  # fall back to train-time gt if not given
-
-        # Build evaluation grid
-        x = torch.linspace(self.xa, self.xb, nx, device=dev)
-        y = torch.linspace(self.ya, self.yb, ny, device=dev)
-        t = torch.linspace(self.t0, self.t1, nt_eval, device=dev)
-        Xg, Yg = torch.meshgrid(x, y, indexing="xy")
-        
-        # Helpers to produce start indices with “edge-clamping” to include the last tile
-        def _starts(n: int, k: int):
-            # non-overlapping starts
-            s = list(range(0, max(n - k + 1, 1), k))
-            # ensure we cover the far edge; append last start (may overlap) if needed
-            last = n - k
-            if len(s) == 0 or s[-1] != last:
-                s.append(last)
-            return s
-
-        kx, ky, kt = self.px, self.py, self.pt
-        xs = _starts(nx, kx)
-        ys = _starts(ny, ky)
-        ts_starts = _starts(nt_eval, kt)
-
-        # Preallocate prediction tensor (T, nx, ny) and a written-mask
-        Up = torch.full((nx, ny, nt_eval), float("nan"), device=dev)
-        written = torch.zeros((nx, ny, nt_eval), dtype=torch.bool, device=dev)
- 
-        with torch.no_grad():
-            # Sweep time → y → x (t0..t1, bottom..top, left..right)
-            for it0 in ts_starts:
-                it1 = it0 + kt
-                # time slice values and index range
-                t_slice = t[it0:it1]                       # [kt]
-
-                for jy0 in ys:
-                    jy1 = jy0 + ky
-                    y_vec = y[jy0:jy1]  # [ky]
-                    
-                    for ix0 in xs:
-                        ix1 = ix0 + kx
-                        x_vec = x[ix0:ix1]  # [kx]
-
-                        # Extract the spatial block
-                        X3D = x_vec.view(-1, 1, 1).repeat(1, ky, kt)
-                        Y3D = y_vec.view(1, -1, 1).repeat(kx, 1, kt)
-                        T3D = t_slice.view(1, 1, -1).repeat(kx, ky, 1)
-                        
-                        coords = torch.stack([X3D, Y3D, T3D], dim=-1).view(-1, 3)  # [kx*ky*kt, 3]
-
-                        # Model prediction for this patch
-                        up_patch = self._forward_points(model, coords)  # [kx*ky*kt, 1]
-                        up_patch = up_patch[..., :1].squeeze(-1).view(kx, ky, kt)  # [kx,ky,kt]
-
-                        # Scatter into the global tensor, skipping already-written cells
-                        # We iterate in the same order to preserve the “first writer wins” rule.
-                        for dt in range(kt):
-                            tt = it0 + dt
-                            # Build a mask of cells not yet written in this block
-                            block_written = written[ix0:ix1, jy0:jy1, tt]
-                            to_write = ~block_written
-                            if to_write.any():
-                                # Write only where not written yet
-                                Up[ix0:ix1, jy0:jy1, tt][to_write] = up_patch[:,:,dt][to_write]
-                                written[ix0:ix1, jy0:jy1, tt][to_write] = True
-
-        # Ground truth over the *entire* domain for all times
-        Utrue = torch.empty_like(Up)
-        for it in range(nt_eval):
-            # broadcast t[it] to grid shape
-            tt = t[it].expand_as(Xg)
-            Utrue[:,:,it] = self.u_star(Xg, Yg, tt)
-        # Utrue shape: [nt_eval, nx, ny]
-
-        valid = ~torch.isnan(Up)
-        if not valid.any():
-            return float("nan")
-
-        num = torch.linalg.norm((Up[valid] - Utrue[valid]).reshape(-1))
-        den = torch.linalg.norm(Utrue[valid].reshape(-1)) + 1e-12
-        return float((num / den).item())
-
     def _tile_pred_true_on_grid(self, model, grid_cfg, nt_override: int = None):
         """
         Assemble predictions (and ground-truth) over the whole (x,y,t) domain
@@ -483,7 +474,18 @@ class Helmholtz2D(BaseExperiment):
             tval = ts[it].expand_as(Xg)
             U_true_T[:,:,it] = self.u_star(Xg, Yg, tval)
 
-        return x, y, ts, U_pred_T, U_true_T
+        return x, y, ts, U_pred_T.transpose(0,1), U_true_T
+    
+    def relative_l2_on_grid(self, model, grid_cfg) -> float:
+        x, y, ts, U_pred_T, U_true_T = self._tile_pred_true_on_grid(model, grid_cfg)
+
+        valid = ~torch.isnan(U_pred_T)
+        if not valid.any():
+            return float("nan")
+
+        num = torch.linalg.norm((U_pred_T[valid] - U_true_T[valid]).reshape(-1))
+        den = torch.linalg.norm(U_true_T[valid].reshape(-1)) + 1e-12
+        return float((num / den).item())
 
     def plot_final(self, model, grid_cfg, out_dir):
         """

@@ -41,13 +41,15 @@ def extract_xy_patches(
       is_bnd: [L, P]     (1 if that point is on domain boundary)
       meta:   dict with strides/sizes
     """
-    # pad_xa = xa - (xb-xa)/(nx-1)
-    # pad_xb = xb + (xb-xa)/(nx-1)
-    # pad_ya = ya - (yb-ya)/(ny-1)
-    # pad_yb = yb + (yb-ya)/(ny-1)
-    # img, mask, (xv, yv) = _build_xy_grid(pad_xa, pad_xb, pad_ya, pad_yb, nx+2, ny+2, device) # with 1-cell pad
-    img, mask, (xv, yv) = _build_xy_grid(xa, xb, ya, yb, nx, ny, device)
-
+    if pad_mode == "none":
+        img, mask, (xv, yv) = _build_xy_grid(xa, xb, ya, yb, nx, ny, device)
+    elif pad_mode == "extend":
+        pad_xa = xa - (xb-xa)/(nx-1)
+        pad_xb = xb + (xb-xa)/(nx-1)
+        pad_ya = ya - (yb-ya)/(ny-1)
+        pad_yb = yb + (yb-ya)/(ny-1)
+        img, mask, (xv, yv) = _build_xy_grid(pad_xa, pad_xb, pad_ya, pad_yb, nx+2, ny+2, device) # with 1-cell pad
+    
     unfold = torch.nn.Unfold(kernel_size=(ky, kx), stride=(sy, sx))
 
     # Unfold coordinates: [1, 2*P, L] -> [L, 2*P] # L means number of patches, and P = kx*ky
@@ -126,6 +128,11 @@ def attach_time(
         # track which positions came from real indices [0, nt-1]
         idx_line = torch.arange(-pL, nt + pR, device=device)
         padded_is_real = (idx_line >= 0) & (idx_line < nt)
+    elif pad_mode_t == "extend":
+        dt = (t1-t0) / (nt-1)
+        t_start = t0 - dt
+        t_end   = t1 + dt
+        t3p = torch.linspace(t_start, t_end, nt + 2, device=device, dtype=dtype).view(1, 1, -1)
     else:  # "none"
         t3p = t3  # no pad
         idx_line = torch.arange(0, nt, device=device)
