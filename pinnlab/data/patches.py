@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from typing import Tuple, Dict
 
-def _build_xy_grid(xa, xb, ya, yb, nx, ny, device):
+def _build_xy_grid(xa, xb, ya, yb, nx, ny, device, true_xa=None, true_xb=None):
     # Xg, Yg: [nx, ny] (indexing='xy')
     x = torch.linspace(xa, xb, nx, device=device)
     y = torch.linspace(ya, yb, ny, device=device)
@@ -12,6 +12,12 @@ def _build_xy_grid(xa, xb, ya, yb, nx, ny, device):
     Yimg = Yg.T  # [ny, nx]
     img  = torch.stack([Ximg, Yimg], dim=0).unsqueeze(0)
     mask = torch.ones((1, 1, ny, nx), device=device)
+    if true_xa is not None:
+        mask[:,:,:,0] = 0
+        mask[:,:,:,-1] = 0
+    if true_xb is not None:
+        mask[:,:,0,:] = 0
+        mask[:,:,-1,:] = 0
     return img, mask, (x, y)
 
 def _pad2d(t, pad_hw, mode, value=0.0):
@@ -48,7 +54,7 @@ def extract_xy_patches(
         pad_xb = xb + (xb-xa)/(nx-1)
         pad_ya = ya - (yb-ya)/(ny-1)
         pad_yb = yb + (yb-ya)/(ny-1)
-        img, mask, (xv, yv) = _build_xy_grid(pad_xa, pad_xb, pad_ya, pad_yb, nx+2, ny+2, device) # with 1-cell pad
+        img, mask, (xv, yv) = _build_xy_grid(pad_xa, pad_xb, pad_ya, pad_yb, nx+2, ny+2, device, true_xa=xa, true_xb=xb) # with 1-cell pad
     
     unfold = torch.nn.Unfold(kernel_size=(ky, kx), stride=(sy, sx))
 
@@ -72,7 +78,7 @@ def extract_xy_patches(
     x = coords[..., 0]; y = coords[..., 1]
     is_bnd = ((x - xa).abs() <= 0.5*eps_x) | ((x - xb).abs() <= 0.5*eps_x) | \
              ((y - ya).abs() <= 0.5*eps_y) | ((y - yb).abs() <= 0.5*eps_y)
-    is_bnd = (is_bnd & (valid > 0)).to(coords.dtype)
+    is_bnd = is_bnd.to(coords.dtype)
 
     meta = {
         "L": L, "P": P, "kx": kx, "ky": ky, "sx": sx, "sy": sy,

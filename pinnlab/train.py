@@ -159,8 +159,6 @@ def main(args):
 
     for ep in pbar:
         model.train()
-        
-        # exp.prepare_epoch_patch_bank()
 
         running = {"res": 0.0, "bc": 0.0, "ic": 0.0, "total": 0.0}
         

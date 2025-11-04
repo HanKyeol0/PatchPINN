@@ -1,12 +1,12 @@
 # run: scripts/ffn/helmholtz2d.sh
 
-tag: REVIVE21
-device: cuda:0
+tag: REVIVE4
+device: cuda:1
 
 domain:
   x: [-1.0, 1.0]
   y: [-1.0, 1.0]
-  t: [-1.0, 1.0]
+  t: [0.0, 2.0]
 
 # Patch configuration
 patch:
@@ -16,8 +16,8 @@ patch:
 
 # Grid configuration (total points)
 grid:
-  x: 90  # total grid points in x
-  y: 90  # total grid points in y
+  x: 60  # total grid points in x
+  y: 60  # total grid points in y
   t: 30  # total grid points in time
 
 # Stride for overlapping patches (optional)
@@ -44,7 +44,7 @@ bc_type: dirichlet # dirichlet, analytic (not implemented "periodic", "neumann",
 bc_value: 0.0
 
 # Training
-batch_size: 4   # number of patches per batch
+batch_size: 8   # number of patches per batch
 
 # Override dimensions for compatibility with patch models
 in_features: 3   # (x, y, t)

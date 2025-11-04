@@ -1,8 +1,8 @@
 seed: 42
 device: "cuda:0"
 train:
-  epochs: 5000
-  microbatches: 8           # how many micro-steps per epoch
+  epochs: 1000
+  microbatches: 256           # how many micro-steps per epoch
   patches_per_batch: 8       # how many patches per micro-step
   accumulate_steps: 1        # set >1 if you want gradient accumulation
   optimizer:
@@ -34,10 +34,10 @@ log:
     mode: "online"
 eval:
   grid:
-    nx: 91
-    ny: 91
+    nx: 61
+    ny: 61
     nt: 31
-  every: 1000
+  every: 3000
 gradflow:
   enabled: false
   every: 500
