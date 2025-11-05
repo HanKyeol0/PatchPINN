@@ -1,7 +1,7 @@
 # run: scripts/ffn/helmholtz2d.sh
 
-tag: REVIVE26
-device: cuda:1
+tag: REVIVE28
+device: cuda:0
 
 domain:
   x: [-1.0, 1.0]
