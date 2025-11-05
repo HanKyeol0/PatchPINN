@@ -232,21 +232,21 @@ def main(args):
 
             global_step += 1
             
-        # # Simple validation metric (relative L2 on a fixed grid)
-        # best_path = os.path.join(out_dir, "best.pt")
-        # if (ep % eval_every == 0) or (ep == epochs - 1):
-        #     with torch.no_grad():
-        #         rel_l2 = exp.relative_l2_on_grid(model, base_cfg["eval"]["grid"])
-        #     wandb_log({"eval/rel_l2": rel_l2, "epoch": ep}, step=global_step)
+        # Simple validation metric (relative L2 on a fixed grid)
+        best_path = os.path.join(out_dir, "best.pt")
+        if (ep % eval_every == 0) or (ep == epochs - 1):
+            with torch.no_grad():
+                rel_l2 = exp.relative_l2_on_grid(model, base_cfg["eval"]["grid"])
+            wandb_log({"eval/rel_l2": rel_l2, "epoch": ep}, step=global_step)
 
-        #     best_path = os.path.join(out_dir, "best.pt")
-        #     if rel_l2 < (best_metric - es_cfg.get("min_delta", 0.0)):
-        #         best_metric = rel_l2
-        #         best_state = {k: v.clone() for k, v in model.state_dict().items()}
-        #         torch.save({k: v.detach().cpu() for k, v in best_state.items()}, best_path)
-        #     if early and early.step(rel_l2):
-        #         print(f"\n[EarlyStopping] Stopping at epoch {ep}. Best rel_l2={best_metric:.3e}")
-        #         break
+            best_path = os.path.join(out_dir, "best.pt")
+            if rel_l2 < (best_metric - es_cfg.get("min_delta", 0.0)):
+                best_metric = rel_l2
+                best_state = {k: v.clone() for k, v in model.state_dict().items()}
+                torch.save({k: v.detach().cpu() for k, v in best_state.items()}, best_path)
+            if early and early.step(rel_l2):
+                print(f"\n[EarlyStopping] Stopping at epoch {ep}. Best rel_l2={best_metric:.3e}")
+                break
             
     training_end_time = time.time()
 

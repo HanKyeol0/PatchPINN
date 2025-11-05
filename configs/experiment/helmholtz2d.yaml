@@ -1,6 +1,6 @@
 # run: scripts/ffn/helmholtz2d.sh
 
-tag: REVIVE4
+tag: REVIVE26
 device: cuda:1
 
 domain:
@@ -12,7 +12,7 @@ domain:
 patch:
   x: 3   # points per patch in x
   y: 3   # points per patch in y
-  t: 3   # points per patch in time
+  t: 1   # points per patch in time
 
 # Grid configuration (total points)
 grid:
@@ -39,7 +39,7 @@ a2: 2.0          # frequency in y direction
 omega: 2.0       # temporal frequency
 ic_v_weight: 1.0
 
-derivative_method: finite_diff_neighbors # autodiff, finite_diff_grid, finite_diff_neighbors
+derivative_method: autodiff # autodiff, finite_diff_grid, finite_diff_neighbors
 bc_type: dirichlet # dirichlet, analytic (not implemented "periodic", "neumann", .. yet)
 bc_value: 0.0
 

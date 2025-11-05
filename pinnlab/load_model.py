@@ -39,9 +39,13 @@ def main(args):
 
     if make_video:
         print("making video...")
-        grid = args.video_grid
-        vid_grid = {'x': grid['x'], 'y': grid['y']}
-        nt_video = grid['t']
+        if args.video_grid:
+            grid = args.video_grid
+            vid_grid = {'x': grid['x'], 'y': grid['y']}
+            nt_video = grid['t']
+        else:
+            vid_grid = {'x': base_cfg["eval"]['nt'], 'y': base_cfg["eval"]['ny']}
+            nt_video = base_cfg["eval"]['nt']
         fps = 10
         vid_path = exp.make_video(model, vid_grid, out_dir=folder_path,
                                   filename=args.video_file_name, nt_video=nt_video, fps=fps)
@@ -55,7 +59,7 @@ if __name__ == "__main__":
     parser.add_argument("--train", required=True)
     parser.add_argument("--evaluate", required=True)
     parser.add_argument("--make_video", required=True)
-    parser.add_argument("--video_grid", type=json.loads, required=True)
+    parser.add_argument("--video_grid", type=json.loads, required=False)
     parser.add_argument("--video_file_name", required=True)
     args = parser.parse_args()
     main(args)

@@ -4,16 +4,16 @@ set -e
 
 EXPERIMENT_NAME=helmholtz2d
 MODEL_NAME=ffn
-EXPERIMENT_TAG=a3
+EXPERIMENT_TAG=REVIVE26
 DEVICE=cuda:0
 
-FOLDER="outputs/${EXPERIMENT_NAME}_${MODEL_NAME}_${EXPERIMENT_TAG}"
+FOLDER="outputs/${EXPERIMENT_NAME}/${EXPERIMENT_NAME}_${MODEL_NAME}_${EXPERIMENT_TAG}"
 
 TRAIN=false
 EVALUATE=false
 MAKE_VIDEO=true
-VIDEO_FILE_NAME=low_resolution_evolution.mp4
-VIDEO_GRID='{"x":60,"y":60,"t":20}'
+VIDEO_FILE_NAME=remade_video.mp4
+# VIDEO_GRID='{"x":60,"y":60,"t":20}'
 
 python -m pinnlab.load_model \
   --experiment_name $EXPERIMENT_NAME \
@@ -23,5 +23,5 @@ python -m pinnlab.load_model \
   --train $TRAIN \
   --evaluate $EVALUATE \
   --make_video $MAKE_VIDEO \
-  --video_grid $VIDEO_GRID \
   --video_file_name $VIDEO_FILE_NAME \
+  # --video_grid $VIDEO_GRID \
